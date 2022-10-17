@@ -1,0 +1,40 @@
+[package]
+name = "speckmeter"
+version = "0.1.0"
+authors = ["Max Krummenacher <maxkrummenacher@bluewin.ch>"]
+edition = "2021"
+rust-version = "1.60"
+
+
+[dependencies]
+egui = "0.19.0"
+eframe = { version = "0.19.0", features = ["persistence"] }
+serde = { version = "1", features = ["derive"] }
+nokhwa = { version = "0.9.4", features = ["input-v4l"] }
+itertools = "0.10.5"
+image = "0.24.4"
+log = "0.4.17"
+
+# native:
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing-subscriber = "0.3"
+
+# web:
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.6"
+tracing-wasm = "0.2"
+
+
+[profile.release]
+opt-level = 2 # fast and small wasm
+
+
+[patch.crates-io]
+
+# If you want to use the bleeding edge version of egui and eframe:
+# egui = { git = "https://github.com/emilk/egui", branch = "master" }
+# eframe = { git = "https://github.com/emilk/egui", branch = "master" }
+
+# If you fork https://github.com/emilk/egui you can test with:
+# egui = { path = "../egui/crates/egui" }
+# eframe = { path = "../egui/crates/eframe" }
