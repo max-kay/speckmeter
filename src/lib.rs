@@ -1,4 +1,4 @@
-#![warn(clippy::all, rust_2018_idioms)]
+#![feature(io_error_other)]
 
 mod app;
 mod cam;

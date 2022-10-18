@@ -1,8 +1,12 @@
-use std::vec::Vec;
-
-use egui::Ui;
+use egui::{mutex::Mutex, ColorImage};
+use image::{buffer::ConvertBuffer, ImageBuffer, Rgb, RgbaImage};
+use log::error;
+use once_cell::sync::Lazy;
+use v4l::{io::traits::CaptureStream, prelude::*};
 
 use crate::cam::CameraModule;
+
+pub static CAMERA_STREAM: Lazy<Mutex<Option<MmapStream>>> = Lazy::new(Default::default);
 
 pub struct Image {
     width: usize,
@@ -10,33 +14,33 @@ pub struct Image {
     data: Vec<u8>,
 }
 
-impl Image {
-    pub fn new(width: usize, height: usize) -> Self {
-        Self {
-            width,
-            height,
-            data: vec![0; width * height * 4],
-        }
-    }
-
-    pub fn mut_buff(&mut self) -> &mut [u8] {
-        &mut self.data
-    }
-
-    pub fn as_color_image(&self) -> egui::ColorImage {
-        egui::ColorImage::from_rgba_unmultiplied([self.width, self.height], &self.data)
-    }
-
-    fn draw(&mut self, ui: &mut Ui) {
-        let texture: egui::TextureHandle = ui.ctx().load_texture(
-            "camera view",
-            self.as_color_image(),
-            egui::TextureFilter::Linear,
-        );
-
-        ui.image(&texture, ui.ctx().used_size());
-    }
-}
+// impl Image {
+//     pub fn new(width: usize, height: usize, buf: &[u8]) -> Self {
+//         Self {
+//             width,
+//             height,
+//             data: buf.into(),
+//         }
+//     }
+//
+//     pub fn mut_buff(&mut self) -> &mut [u8] {
+//         &mut self.data
+//     }
+//
+//     pub fn as_color_image(&self) -> egui::ColorImage {
+//         egui::ColorImage::rg
+//     }
+//
+//     fn draw(&mut self, ui: &mut Ui) {
+//         let texture: egui::TextureHandle = ui.ctx().load_texture(
+//             "camera view",
+//             self.as_color_image(),
+//             egui::TextureFilter::Linear,
+//         );
+//
+//         ui.image(&texture, ui.ctx().used_size());
+//     }
+// }
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize, Default)]
@@ -50,8 +54,8 @@ pub struct SpeckApp {
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 enum MainState {
-    Off,
     #[default]
+    Off,
     CameraView,
 }
 
@@ -80,13 +84,20 @@ impl eframe::App for SpeckApp {
     /// Called each time the UI needs repainting, which may be many times per second.
     /// Put your widgets into a `SidePanel`, `TopPanel`, `CentralPanel`, `Window` or `Area`.
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        #[cfg(not(target_arch = "wasm32"))] // no File->Quit on web pages!
-        egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
+        egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             // The top panel is often a good place for a menu bar:
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Quit").clicked() {
                         frame.close();
+                    }
+                });
+                ui.menu_button("View", |ui| {
+                    if ui.selectable_label(matches!(self.main_state, MainState::Off), "Off").clicked() {
+                        self.main_state = MainState::Off;
+                    }
+                    if ui.selectable_label(matches!(self.main_state, MainState::CameraView), "Camera").clicked() {
+                        self.main_state = MainState::CameraView;
                     }
                 });
                 egui::warn_if_debug_build(ui);
@@ -102,12 +113,42 @@ impl eframe::App for SpeckApp {
                 ui.strong("no view");
             }
             MainState::CameraView => {
-                if self.camera_module.active() {
-                    match self.camera_module.get_image() {
-                        Ok(mut image) => image.draw(ui),
-                        Err(err) => {
-                            ui.label(format!("failed to load image\n{}", err));
+                let stream_on = CAMERA_STREAM.lock().is_some();
+                if stream_on {
+                    match CAMERA_STREAM.lock().as_mut().unwrap().next() {
+                        Ok((buf, meta)) => {
+                            match ImageBuffer::from_raw(
+                                self.camera_module.width(),
+                                self.camera_module.height(),
+                                buf,
+                            ) {
+                                Some(image) => {
+                                    let image: RgbaImage =
+                                        (image as ImageBuffer<Rgb<u8>, &[u8]>).convert();
+                                    let image = ColorImage::from_rgba_unmultiplied(
+                                        [
+                                            self.camera_module.width() as usize,
+                                            self.camera_module.height() as usize,
+                                        ],
+                                        &image,
+                                    );
+                                    let texture: egui::TextureHandle = ui.ctx().load_texture(
+                                        format!("frame {}", meta.sequence),
+                                        image,
+                                        egui::TextureFilter::Linear,
+                                    );
+                                    ui.image(&texture, ui.ctx().used_size());
+                                }
+                                None => {
+                                    error!("could not load image frame: {}, {} bytes\n    suposed to have {}", meta.sequence, buf.len(), self.camera_module.width()* self.camera_module.height()*3)
+                                }
+                            };
                         }
+                        Err(_) => todo!(),
+                    }
+                } else if self.camera_module.has_camera() {
+                    if let Err(err) = self.camera_module.make_stream() {
+                        ui.label(format!("{}", err));
                     }
                 } else {
                     ui.label("no active camera");
