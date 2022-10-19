@@ -2124,14 +2124,14 @@ checksum = "950f4328645beeb19551e4a884600adf4e4714fe96f45c46f85eb706f4d786ce"
 dependencies = [
  "bitflags",
  "libc",
- "v4l2-sys-mit",
+ "v4l-sys",
 ]
 
 [[package]]
-name = "v4l2-sys-mit"
+name = "v4l-sys"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0c932c06df4af1dfb229f604214f2a87993784596ff33ffdadcba1b5519254e"
+checksum = "f91dc47f9668a0a1a0af7ba194f2d543a68c2ef9eb61888f89565d60b34247fe"
 dependencies = [
  "bindgen",
 ]
