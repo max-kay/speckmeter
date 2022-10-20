@@ -239,8 +239,9 @@ fn update_ctrl(
     match typ {
         control::Type::Integer => {
             if let control::Value::Integer(mut val) = control.value {
-                if *step == 1 {
-                    if ui.add(Slider::new(&mut val, *minimum..=*maximum)).changed() {
+                ui.horizontal(|ui| {
+
+                    if ui.add(Slider::new(&mut val, *minimum..=*maximum).clamp_to_range(true).integer().step_by(*step as f64)).drag_released() {
                         let new = Control {
                             id: *id,
                             value: control::Value::Integer(val),
@@ -250,30 +251,19 @@ fn update_ctrl(
                             Err(err) => error!("could not set control {}", err),
                         }
                     }
-                } else {
-                    egui::ComboBox::from_id_source(name)
-                        .selected_text(val.to_string())
-                        .show_ui(ui, |ui| {
-                            let mut iter_val = *minimum;
-                            let step = *step as i64;
-                            while iter_val <= *maximum {
-                                if ui
-                                    .selectable_label(val == iter_val, iter_val.to_string())
-                                    .clicked()
-                                {
-                                    let new = Control {
-                                        id: *id,
-                                        value: control::Value::Integer(iter_val),
-                                    };
-                                    match set_control(cam, new) {
-                                        Ok(_) => control.value = control::Value::Integer(iter_val),
-                                        Err(err) => error!("could not set control {}", err),
-                                    }
-                                    iter_val += step;
-                                }
+                    if ui.button("↻").clicked() {
+                        let new = Control {
+                            id: *id,
+                            value: control::Value::Integer(*default),
+                        };
+                        match set_control(cam, new) {
+                            Ok(_) => {
+                                control.value = control::Value::Integer(*default)
                             }
-                        });
-                }
+                            Err(err) => error!("could not set default {}", err),
+                        }
+                    }
+                });
             } else {
                 error!(
                     "control description with interger type was: {:?}",

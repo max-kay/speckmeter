@@ -1,4 +1,4 @@
-use egui::{mutex::Mutex, ColorImage, Ui};
+use egui::{emath, mutex::Mutex, Color32, ColorImage, Frame, Mesh, Pos2, Rect, TextureHandle, Ui};
 use image::{buffer::ConvertBuffer, ImageBuffer, Rgb, RgbaImage};
 use log::error;
 use once_cell::sync::Lazy;
@@ -18,10 +18,15 @@ pub struct Image {
     width: usize,
     height: usize,
     data: Vec<u8>,
+    #[serde(skip)]
+    texture: Option<TextureHandle>,
 }
 
 impl Image {
-    fn get_texture(&self, ui: &mut Ui) -> egui::TextureHandle {
+    fn get_texture(&mut self, ui: &mut Ui) -> &egui::TextureHandle {
+        if self.texture.is_some() {
+            return self.texture.as_ref().unwrap();
+        }
         let buf: RgbaImage = ImageBuffer::<Rgb<u8>, &[u8]>::from_raw(
             self.width as u32,
             self.height as u32,
@@ -30,8 +35,12 @@ impl Image {
         .expect("building buffer failed")
         .convert();
         let image = ColorImage::from_rgba_unmultiplied([self.width, self.height], &buf);
-        ui.ctx()
-            .load_texture("calibration img", image, egui::TextureFilter::Linear)
+        self.texture = Some(ui.ctx().load_texture(
+            "calibration img",
+            image,
+            egui::TextureFilter::Linear,
+        ));
+        self.texture.as_ref().unwrap()
     }
 }
 
@@ -41,6 +50,7 @@ impl From<ImageBuffer<Rgb<u8>, &[u8]>> for Image {
             width: value.width() as usize,
             height: value.height() as usize,
             data: value.to_vec(),
+            texture: None,
         }
     }
 }
@@ -81,7 +91,9 @@ pub struct SpeckApp {
     main_state: MainState,
     show_logs: bool,
     show_camera_opts: bool,
+    #[serde(skip)]
     calibration_img: Option<Image>,
+    #[serde(skip)]
     calibration: Option<Calibration>,
 }
 
@@ -90,7 +102,7 @@ impl Default for SpeckApp {
         Self {
             camera_module: Default::default(),
             main_state: Default::default(),
-            show_logs: false,
+            show_logs: true,
             show_camera_opts: true,
             calibration_img: None,
             calibration: None,
@@ -128,15 +140,32 @@ impl eframe::App for SpeckApp {
         eframe::set_value(storage, eframe::APP_KEY, self);
     }
 
-    /// Called each time the UI needs repainting, which may be many times per second.
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("menu").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.menu_button("Sidepanels", |ui| {
-                        ui.checkbox(&mut self.show_camera_opts, "Camera Module");
-                        ui.checkbox(&mut self.show_logs, "Log window")
-                    });
+        egui::TopBottomPanel::top("menu").show(ctx, |ui| self.menu(ui));
+
+        if self.show_camera_opts {
+            egui::SidePanel::left("side_panel").show(ctx, |ui| {
+                self.camera_module.update(ui);
+            });
+        }
+
+        if self.show_logs {}
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.main_view(ui);
+        });
+    }
+}
+
+impl SpeckApp {
+    fn menu(&mut self, ui: &mut Ui) {
+        egui::menu::bar(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.menu_button("Sidepanels", |ui| {
+                    ui.checkbox(&mut self.show_camera_opts, "Camera Module");
+                    ui.checkbox(&mut self.show_logs, "Log window")
+                });
+                ui.horizontal_centered(|ui| {
                     ui.selectable_value(&mut self.main_state, MainState::Off, "Off");
                     ui.selectable_value(&mut self.main_state, MainState::CameraView, "📷 Camera");
                     ui.selectable_value(
@@ -147,21 +176,17 @@ impl eframe::App for SpeckApp {
                 })
             })
         });
+    }
 
-        if self.show_camera_opts {
-            egui::SidePanel::left("side_panel").show(ctx, |ui| {
-                self.camera_module.update(ui);
-            });
-        }
-
-        egui::CentralPanel::default().show(ctx, |ui| match self.main_state {
+    fn main_view(&mut self, ui: &mut Ui) {
+        match self.main_state {
             MainState::Off => {
                 ui.strong("no view");
             }
             MainState::CameraView => {
                 let stream_on = CAMERA_STREAM.lock().is_some();
                 if stream_on {
-                    ui.horizontal_centered(|ui| {
+                    ui.vertical_centered(|ui| {
                         if ui.button("take calibration image").clicked() {
                             match CAMERA_STREAM.lock().as_mut().unwrap().next() {
                                 Ok((buf, meta)) => match make_img_buf(
@@ -182,40 +207,12 @@ impl eframe::App for SpeckApp {
                             }
                         }
                     });
-                    match CAMERA_STREAM.lock().as_mut().unwrap().next() {
-                        Ok((buf, meta)) => {
-                            match make_img_buf(
-                                buf,
-                                self.camera_module.width(),
-                                self.camera_module.height(),
-                            ) {
-                                Some(image) => {
-                                    let image: RgbaImage = image.convert();
-                                    let image = ColorImage::from_rgba_unmultiplied(
-                                        [
-                                            self.camera_module.width() as usize,
-                                            self.camera_module.height() as usize,
-                                        ],
-                                        &image,
-                                    );
-                                    let texture: egui::TextureHandle = ui.ctx().load_texture(
-                                        format!("frame {}", meta.sequence),
-                                        image,
-                                        egui::TextureFilter::Linear,
-                                    );
-                                    ui.image(&texture, ui.ctx().used_size());
-                                }
-                                None => {
-                                    error!(
-                                        "could not load image frame: {}, {} bytes received",
-                                        meta.sequence, meta.bytesused
-                                    )
-                                }
-                            };
-                            ui.ctx()
-                                .request_repaint_after(std::time::Duration::from_millis(10))
-                        }
-                        Err(_) => todo!(),
+                    if let Some(texture) = self.get_current_texture(ui) {
+                        egui::Frame::canvas(ui.style()).show(ui, |ui| {
+                            draw_texture(&texture, ui);
+                        });
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_millis(10))
                     }
                 } else if self.camera_module.has_camera() {
                     if let Err(err) = self.camera_module.make_stream() {
@@ -225,7 +222,7 @@ impl eframe::App for SpeckApp {
                     ui.label("no active camera");
                 }
             }
-            MainState::Calibration => match self.calibration_img.as_ref() {
+            MainState::Calibration => match self.calibration_img.as_mut() {
                 None => {
                     ui.strong("there is no calibration image");
                     if ui.button("go to camera").clicked() {
@@ -234,11 +231,81 @@ impl eframe::App for SpeckApp {
                 }
                 Some(img) => {
                     let texture = img.get_texture(ui);
-                    ui.image(&texture, ui.ctx().used_size());
+                    Frame::canvas(ui.style()).show(ui, |ui| {
+                        let (to_screen, respone) = draw_texture(texture, ui);
+                        let to_picture = to_screen.inverse();
+                    });
                 }
             },
-        });
-
-        if self.show_logs {}
+        }
     }
+}
+
+impl SpeckApp {
+    fn get_current_texture(&mut self, ui: &mut Ui) -> Option<egui::TextureHandle> {
+        match CAMERA_STREAM.lock().as_mut().unwrap().next() {
+            Ok((buf, meta)) => {
+                match make_img_buf(buf, self.camera_module.width(), self.camera_module.height()) {
+                    Some(image) => {
+                        let image: RgbaImage = image.convert();
+                        let image = ColorImage::from_rgba_unmultiplied(
+                            [
+                                self.camera_module.width() as usize,
+                                self.camera_module.height() as usize,
+                            ],
+                            &image,
+                        );
+                        Some(ui.ctx().load_texture(
+                            format!("frame {}", meta.sequence),
+                            image,
+                            egui::TextureFilter::Linear,
+                        ))
+                    }
+                    None => {
+                        error!(
+                            "could not load image frame: {}, {} bytes received",
+                            meta.sequence, meta.bytesused
+                        );
+                        None
+                    }
+                }
+            }
+            Err(err) => {
+                error!("failed to read frame: {}", err);
+                None
+            }
+        }
+    }
+}
+
+fn draw_texture(texture: &TextureHandle, ui: &mut Ui) -> (emath::RectTransform, egui::Response) {
+    let (response, painter) = ui.allocate_painter(
+        ui.available_size_before_wrap(),
+        egui::Sense::click_and_drag(),
+    );
+
+    let to_screen = emath::RectTransform::from_to(
+        Rect::from_min_size(Pos2::ZERO, response.rect.square_proportions()),
+        response.rect,
+    );
+
+    let mut shape = Mesh::with_texture(texture.into());
+
+    shape.add_rect_with_uv(
+        Rect {
+            min: to_screen * Pos2::ZERO,
+            max: to_screen
+                * Pos2 {
+                    y: 1.0,
+                    x: texture.aspect_ratio(),
+                },
+        },
+        Rect {
+            min: Pos2::ZERO,
+            max: Pos2 { y: 1.0, x: 1.0 },
+        },
+        Color32::WHITE,
+    );
+    painter.add(shape);
+    (to_screen, response)
 }
