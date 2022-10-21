@@ -1,6 +1,10 @@
-use egui::{emath, mutex::Mutex, Color32, ColorImage, Frame, Mesh, Pos2, Rect, TextureHandle, Ui};
+use eframe::emath::RectTransform;
+use egui::{
+    emath, mutex::Mutex, Align2, Color32, ColorImage, Frame, Mesh, Pos2, Rect, Response,
+    TextureHandle, Ui,
+};
 use image::{buffer::ConvertBuffer, ImageBuffer, Rgb, RgbaImage};
-use log::error;
+use log::{error, warn};
 use once_cell::sync::Lazy;
 use v4l::{io::traits::CaptureStream, prelude::*};
 
@@ -58,27 +62,130 @@ impl From<ImageBuffer<Rgb<u8>, &[u8]>> for Image {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Calibration {
     lines: Vec<(f32, Line)>,
+    start: Option<(f32, f32)>,
+    current_line: Option<Line>,
+    current_text: String,
 }
 
 impl Calibration {
     pub fn new() -> Self {
-        Self { lines: Vec::new() }
+        Self {
+            lines: Vec::new(),
+            start: None,
+            current_line: None,
+            current_text: String::new(),
+        }
     }
 
-    pub fn add_line(&mut self, wave_length: f32, line: Line) {
-        self.lines.push((wave_length, line))
+    fn start_line(&mut self, pos: Pos2) {
+        self.start = Some((pos.x, pos.y))
+    }
+
+    fn end_line(&mut self, pos: Pos2) {
+        match self.start {
+            Some(start) => {
+                self.start = None;
+                self.current_line = Some(Line {
+                    start,
+                    end: (pos.x, pos.y),
+                })
+            }
+            None => warn!("tried to end calibration line with out starting it!"),
+        }
+    }
+
+    fn add_new_wave_length(&mut self, wave_length: f32) {
+        match self.current_line {
+            Some(line) => self.lines.push((wave_length, line)),
+            None => warn!("tried to add wave length with no active line"),
+        }
+        self.current_line = None;
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+const ACTIVE_LINE_STROKE: (f32, Color32) = (5.0, Color32::WHITE);
+const DRAWN_LINE_STROKE: (f32, Color32) = (5.0, Color32::RED);
+const TEXT_COLOR: Color32 = Color32::WHITE;
+
+impl Calibration {
+    pub fn update(&mut self, ui: &mut Ui, to_screen: emath::RectTransform, response: Response) {
+        let to_picture = to_screen.inverse();
+        for (wave_length, line) in self.lines.iter() {
+            let points = line.to_points(to_screen);
+            ui.painter().line_segment(points, DRAWN_LINE_STROKE);
+            ui.painter().text(
+                points[0],
+                Align2::LEFT_BOTTOM,
+                wave_length.to_string(),
+                Default::default(),
+                TEXT_COLOR,
+            );
+        }
+        match self.current_line {
+            None => {
+                if !self.current_text.is_empty() {
+                    self.current_text = String::new()
+                }
+                if response.drag_started() {
+                    self.start_line(
+                        to_picture
+                            * response
+                                .interact_pointer_pos()
+                                .expect("a drag has started so interaction should exist"),
+                    )
+                } else if response.dragged() {
+                    let screen_start =
+                        to_screen * self.start.expect("there should be an active line").into();
+                    ui.painter().line_segment(
+                        [
+                            screen_start,
+                            response
+                                .interact_pointer_pos()
+                                .expect("pointer is draged so there should be an interaction"),
+                        ],
+                        ACTIVE_LINE_STROKE,
+                    )
+                } else if response.drag_released() {
+                    self.end_line(
+                        to_picture
+                            * response
+                                .interact_pointer_pos()
+                                .expect("drag ended so there should be an interaction"),
+                    )
+                }
+            }
+            Some(line) => {
+                ui.painter().line_segment(line.to_points(to_screen), DRAWN_LINE_STROKE);
+                egui::Window::new("Add Wave length to last line").show(ui.ctx(), |ui| {
+                    ui.text_edit_singleline(&mut self.current_text);
+                    ui.horizontal(|ui| {
+                        if ui.button("OK").clicked() {
+                            match self.current_text.parse::<f32>() {
+                                Ok(val) => self.add_new_wave_length(val),
+                                Err(_) => {
+                                    self.current_text = "this has to be a valid number".to_string()
+                                }
+                            }
+                        }
+                        if ui.button("Discard Line").clicked() {
+                            self.current_line = None;
+                        }
+                    });
+                });
+            }
+        }
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
 struct Line {
     start: (f32, f32),
     end: (f32, f32),
 }
 
 impl Line {
-    pub fn new(start: (f32, f32), end: (f32, f32)) -> Self {
-        Self { start, end }
+    fn to_points(self, to_screen: RectTransform) -> [Pos2; 2] {
+        [to_screen * self.start.into(), to_screen * self.end.into()]
     }
 }
 
@@ -222,21 +329,28 @@ impl SpeckApp {
                     ui.label("no active camera");
                 }
             }
-            MainState::Calibration => match self.calibration_img.as_mut() {
-                None => {
-                    ui.strong("there is no calibration image");
-                    if ui.button("go to camera").clicked() {
-                        self.main_state = MainState::CameraView;
+            MainState::Calibration => {
+                *CAMERA_STREAM.lock() = None;
+                if self.calibration.is_none() {
+                    self.calibration = Some(Calibration::new())
+                }
+                match self.calibration_img.as_mut() {
+                    None => {
+                        ui.strong("there is no calibration image");
+                        if ui.button("go to camera").clicked() {
+                            self.main_state = MainState::CameraView;
+                        }
+                    }
+                    Some(img) => {
+                        let texture = img.get_texture(ui);
+                        let style = ui.style();
+                        Frame::canvas(style).show(ui, |ui| {
+                            let (to_screen, response) = draw_texture(texture, ui);
+                            self.calibration.as_mut().unwrap().update(ui, to_screen, response);
+                        });
                     }
                 }
-                Some(img) => {
-                    let texture = img.get_texture(ui);
-                    Frame::canvas(ui.style()).show(ui, |ui| {
-                        let (to_screen, respone) = draw_texture(texture, ui);
-                        let to_picture = to_screen.inverse();
-                    });
-                }
-            },
+            }
         }
     }
 }
