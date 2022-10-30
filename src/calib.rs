@@ -84,17 +84,21 @@ impl Calibration {
                 .iter()
                 .map(|(wavelength, _)| *wavelength as f32)
                 .collect();
-            let temp = [
-                &self.lines.iter().map(|(_, line)| line.start.0).collect_vec(),
-                &self
+            let coordinates = [
+                self
+                    .lines
+                    .iter()
+                    .map(|(_, line)| line.start.0)
+                    .collect_vec(),
+                self
                     .lines
                     .iter()
                     .map(|(_, line)| line.start.1)
                     .collect_vec(),
-                &self.lines.iter().map(|(_, line)| line.end.0).collect_vec(),
-                &self.lines.iter().map(|(_, line)| line.end.1).collect_vec(),
+                self.lines.iter().map(|(_, line)| line.end.0).collect_vec(),
+                self.lines.iter().map(|(_, line)| line.end.1).collect_vec(),
             ];
-            self.spectral = Some(SpectralLines::from_lin_reg(lin_reg(&wavelengths, &temp)))
+            self.spectral = Some(SpectralLines::from_lin_reg(lin_reg(wavelengths, &coordinates)));
         } else {
             error!("calibration is in valid")
         }
@@ -298,15 +302,22 @@ pub struct SpectralLines {
 }
 
 impl SpectralLines {
-    pub fn from_lin_reg(
-        reg: Regression,
-    ) -> Self {
-        let Regression { slopes, y_offsets };
+    pub fn from_lin_reg(reg: Regression) -> Self {
+        let Regression { slopes, y_offsets } = reg;
+
+        let slopes0 = slopes[0];
+        let y_offsets0 = y_offsets[0];
+        let slopes1 = slopes[1];
+        let y_offsets1 = y_offsets[1];
+        let slopes2 = slopes[2];
+        let y_offsets2 = y_offsets[2];
+        let slopes3 = slopes[3];
+        let y_offsets3 = y_offsets[3];
         Self {
-            start_x: Box::new(move |lambda| slopes[0] * lambda + y_offsets[0]),
-            start_y: Box::new(move |lambda| slopes[1] * lambda + y_offsets[1]),
-            end_x: Box::new(move |lambda| slopes[2] * lambda + y_offsets[2]),
-            end_y: Box::new(move |lambda| slopes[3] * lambda + y_offsets[3]),
+            start_x: Box::new(move |lambda| slopes0 * lambda + y_offsets0),
+            start_y: Box::new(move |lambda| slopes1 * lambda + y_offsets1),
+            end_x: Box::new(move |lambda| slopes2 * lambda + y_offsets2),
+            end_y: Box::new(move |lambda| slopes3 * lambda + y_offsets3),
         }
     }
 

@@ -1,29 +1,35 @@
 use itertools::Itertools;
 
-pub fn lin_reg(xs: &[f32], ys: &[&Vec<f32>]) -> Regression {
-    let mean_x = xs.iter().fold(0.0, |acc, x| acc + x) / xs.len() as f32;
-    let mean_y: Vec<f32> = ys
+pub fn lin_reg(xs: Vec<f32>, yss:&[Vec<f32>]) -> Regression {
+    let mean_x = xs.iter().sum::<f32>() / xs.len() as f32;
+    let mean_ys: Vec<f32> = yss
         .iter()
-        .map(|vec| vec.iter().fold(0.0, |acc, y| acc + y) / ys.len() as f32)
-        .collect_vec();
+        .map(|ys| ys.iter().sum::<f32>() / yss.len() as f32)
+        .collect();
 
-    let dev_x = xs.iter().map(|x| x - mean_x);
-    let dev_ys = ys
+    let dev_xs = xs.iter().map(|x| x - mean_x);
+    let dev_yss = yss
         .iter()
-        .map(|vec| vec.iter().enumerate().map(|(i, y)| y - mean_y[i]));
+        .map(|ys| ys.iter().zip(&mean_ys).map(|(y, mean_y)| y - mean_y));
 
-    let x_squared = dev_x.fold(0.0, |acc, x| acc + x*x);
+    let x_squared = dev_xs.clone().fold(0.0, |acc, x| acc + x * x);
 
-    let slopes = dev_ys.clone().map(|dev_y| dev_y.zip(dev_x.clone()).fold(0.0, |acc, (y, x)| acc + x*y));
+    let slopes: Vec<f32> = dev_yss
+        .map(|dev_ys| {
+            dev_ys
+                .zip(dev_xs.clone())
+                .fold(0.0, |acc, (y, x)| acc + x * y)
+                / x_squared
+        })
+        .collect();
 
     let y_offsets = slopes
-        .zip(mean_y)
-        .map(|(slope, mean_y)| mean_y - slope * mean_x);
+        .iter()
+        .zip(&mean_ys)
+        .map(|(slope, mean_y)| mean_y - slope * mean_x)
+        .collect();
 
-    Regression {
-        slopes: slopes.collect(),
-        y_offsets: y_offsets.collect_vec(),
-    }
+    Regression { slopes, y_offsets }
 }
 
 pub struct Regression {
