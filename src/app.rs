@@ -2,11 +2,11 @@ use egui::{
     emath, mutex::Mutex, Color32, ColorImage, Frame, Mesh, Pos2, Rect, TextureHandle, Ui, Vec2,
 };
 use image::{buffer::ConvertBuffer, ImageBuffer, Rgb, RgbaImage};
-use log::error;
+use log::{error, warn};
 use once_cell::sync::Lazy;
 use v4l::{io::traits::CaptureStream, prelude::*};
 
-use crate::{calib, cam::CameraModule};
+use crate::{calib, cam::CameraModule, meter::Meter};
 
 pub static CAMERA_STREAM: Lazy<Mutex<Option<MmapStream>>> = Lazy::new(Default::default);
 
@@ -17,8 +17,8 @@ pub fn make_img_buf(buf: &[u8], width: u32, height: u32) -> Option<ImageBuffer<R
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Image {
-    width: usize,
-    height: usize,
+    pub width: usize,
+    pub height: usize,
     data: Vec<u8>,
     #[serde(skip)]
     texture: Option<TextureHandle>,
@@ -44,6 +44,13 @@ impl Image {
         ));
         self.texture.as_ref().unwrap()
     }
+
+    pub fn get(&self, x: usize, y: usize) -> (u8, u8, u8) {
+        assert!(x < self.width);
+        assert!(y < self.height);
+        let index = 3 * (y * self.width + x);
+        (self.data[index], self.data[index + 1], self.data[index + 2])
+    }
 }
 
 impl From<ImageBuffer<Rgb<u8>, &[u8]>> for Image {
@@ -57,19 +64,20 @@ impl From<ImageBuffer<Rgb<u8>, &[u8]>> for Image {
     }
 }
 
-/// We derive Deserialize/Serialize so we can persist app state on shutdown.
 #[derive(serde::Deserialize, serde::Serialize)]
-#[serde(default)] // if we add new fields, give them default values when deserializing old state
+#[serde(default)]
 pub struct SpeckApp {
     #[serde(skip)]
     camera_module: CameraModule,
     #[serde(skip)]
     calibration_img: Option<Image>,
-    #[serde(skip)]
     calibration: calib::Calibration,
+    #[serde(skip)]
+    meter: Meter,
     main_state: MainState,
     show_camera_opts: bool,
     show_calibration: bool,
+    show_meter_opts: bool,
     show_logs: bool,
 }
 
@@ -80,8 +88,10 @@ impl Default for SpeckApp {
             calibration_img: None,
             calibration: calib::Calibration::new(),
             main_state: Default::default(),
+            meter: Default::default(),
             show_camera_opts: true,
             show_calibration: false,
+            show_meter_opts: false,
             show_logs: true,
         }
     }
@@ -92,6 +102,7 @@ enum MainState {
     #[default]
     CameraView,
     Calibration,
+    GraphView,
 }
 
 impl SpeckApp {
@@ -134,6 +145,10 @@ impl eframe::App for SpeckApp {
             });
         }
 
+        if self.show_meter_opts {
+            egui::SidePanel::right("meter").show(ctx, |ui| self.meter.side_panel(ui));
+        }
+
         if self.show_logs {}
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -152,12 +167,32 @@ impl SpeckApp {
                     ui.checkbox(&mut self.show_calibration, "Calibration window");
                 });
                 ui.horizontal_centered(|ui| {
-                    ui.selectable_value(&mut self.main_state, MainState::CameraView, "📷 Camera");
-                    ui.selectable_value(
-                        &mut self.main_state,
-                        MainState::Calibration,
-                        "⭕ Calibration",
-                    )
+                    if ui
+                        .selectable_value(&mut self.main_state, MainState::CameraView, "📷 Camera")
+                        .clicked()
+                    {
+                        self.show_camera_opts = true;
+                        self.show_calibration = false;
+                    };
+                    if ui
+                        .selectable_value(
+                            &mut self.main_state,
+                            MainState::Calibration,
+                            "⭕ Calibration",
+                        )
+                        .clicked()
+                    {
+                        self.show_calibration = true;
+                        self.show_camera_opts = false;
+                    };
+                    if ui
+                        .selectable_value(
+                            &mut self.main_state,
+                            MainState::GraphView,
+                            "Spectrograph",
+                        )
+                        .clicked()
+                    {}
                 })
             })
         });
@@ -195,6 +230,8 @@ impl SpeckApp {
                         ui.strong("there is no calibration image");
                         if ui.button("go to camera").clicked() {
                             self.main_state = MainState::CameraView;
+                            self.show_calibration = true;
+                            self.show_camera_opts = false;
                         }
                     }
                     Some(img) => {
@@ -208,6 +245,26 @@ impl SpeckApp {
                         });
                     }
                 }
+            }
+            MainState::GraphView => {
+                if CAMERA_STREAM.lock().is_none() {
+                    if let Err(err) = self.camera_module.make_stream() {
+                        error!("failed to open camera stream graph view: {}", err)
+                    }
+                }
+                match self.calibration.get_lines() {
+                    Some(lines) => self.meter.main(
+                        ui,
+                        self.camera_module.width(),
+                        self.camera_module.height(),
+                        lines,
+                    ),
+                    None => {
+                        ui.label("no calibration lines found");
+                        warn!("tried to get calibration lines without generating them")
+                    },
+                }
+                
             }
         }
     }
@@ -224,11 +281,13 @@ impl SpeckApp {
         }
         match CAMERA_STREAM.lock().as_mut().unwrap().next() {
             Ok((buf, meta)) => {
-                match make_img_buf(buf, self.camera_module.width(), self.camera_module.height())
-                {
+                match make_img_buf(buf, self.camera_module.width(), self.camera_module.height()) {
                     Some(img) => {
                         self.calibration_img = Some(img.into());
-                        self.main_state = MainState::Calibration
+                        self.main_state = MainState::Calibration;
+                        self.show_calibration = true;
+                        self.show_camera_opts = false;
+                        self.show_meter_opts = false;
                     }
                     None => error!(
                         "could not load image frame: {}, {} bytes received",

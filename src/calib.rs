@@ -4,7 +4,10 @@ use itertools::Itertools;
 use log::{error, warn};
 use std::mem::swap;
 
-use crate::lin_reg::{lin_reg, Regression};
+use crate::{
+    lin_reg::{lin_reg, Regression},
+    LARGEST_WAVE_LENGTH, SMALLEST_WAVE_LENGTH,
+};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Calibration {
@@ -17,7 +20,7 @@ pub struct Calibration {
     #[serde(skip)]
     spectral: Option<SpectralLines>,
     #[serde(skip)]
-    show_generated: Option<u32>,
+    show_generated: Option<u16>,
 }
 
 impl Calibration {
@@ -77,30 +80,44 @@ impl Calibration {
         }
     }
 
-    fn generate_regression(&mut self) {
-        if self.validate() {
+    fn generate_regression(&mut self) -> Option<()> {
+        if self.validate() && self.lines.len() > 1 {
             let wavelengths: Vec<f32> = self
                 .lines
                 .iter()
                 .map(|(wavelength, _)| *wavelength as f32)
                 .collect();
             let coordinates = [
-                self
-                    .lines
+                self.lines
                     .iter()
                     .map(|(_, line)| line.start.0)
                     .collect_vec(),
-                self
-                    .lines
+                self.lines
                     .iter()
                     .map(|(_, line)| line.start.1)
                     .collect_vec(),
                 self.lines.iter().map(|(_, line)| line.end.0).collect_vec(),
                 self.lines.iter().map(|(_, line)| line.end.1).collect_vec(),
             ];
-            self.spectral = Some(SpectralLines::from_lin_reg(lin_reg(wavelengths, &coordinates)));
+            self.spectral = Some(SpectralLines::from_lin_reg(lin_reg(
+                wavelengths,
+                &coordinates,
+            )));
+            Some(())
         } else {
-            error!("calibration is in valid")
+            error!("calibration is in valid");
+            None
+        }
+    }
+
+    pub fn get_lines(&mut self) -> Option<&SpectralLines> {
+        if self.spectral.is_none() {
+            match self.generate_regression() {
+                Some(_) => self.spectral.as_ref(),
+                None => None,
+            }
+        } else {
+            self.spectral.as_ref()
         }
     }
 }
@@ -110,17 +127,15 @@ const DRAWN_LINE_STROKE: (f32, Color32) = (5.0, Color32::RED);
 const GEN_LINE_STROKE: (f32, Color32) = (2.0, Color32::RED);
 const TEXT_COLOR: Color32 = Color32::WHITE;
 
-const SMALLEST_WAVE_LENGTH: f32 = 400.0;
-const LARGEST_WAVE_LENGTH: f32 = 700.0;
-
 impl Calibration {
     pub fn main_view(&mut self, ui: &mut Ui, to_screen: emath::RectTransform, response: Response) {
         let to_picture = to_screen.inverse();
         if let Some(line_count) = self.show_generated.as_ref() {
             if let Some(spectral) = self.spectral.as_ref() {
-                let step = (LARGEST_WAVE_LENGTH - SMALLEST_WAVE_LENGTH) / (*line_count - 1) as f32;
+                let step =
+                    (LARGEST_WAVE_LENGTH - SMALLEST_WAVE_LENGTH) as f32 / (*line_count - 1) as f32;
                 for i in 0..*line_count {
-                    let wavelength = SMALLEST_WAVE_LENGTH + i as f32 * step;
+                    let wavelength = (SMALLEST_WAVE_LENGTH + i) as f32 * step;
                     let screen_points = spectral
                         .line_with_wavelength(wavelength)
                         .to_points(to_screen);
