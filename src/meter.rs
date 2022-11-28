@@ -1,14 +1,21 @@
+use std::{
+    path::{Path, PathBuf},
+};
+
 use egui::{
     plot::{Plot, PlotPoints},
     Ui,
 };
+use egui_file::FileDialog;
+use itertools::Itertools;
 use line_drawing::XiaolinWu;
-use log::{error, warn};
+use log::{error, info, warn};
 use v4l::io::traits::CaptureStream;
 
 use crate::{
     app::{make_img_buf, Image, CAMERA_STREAM},
-    calib::SpectralLines, SMALLEST_WAVE_LENGTH, LARGEST_WAVE_LENGTH,
+    calib::SpectralLines,
+    csv, LARGEST_WAVE_LENGTH, SMALLEST_WAVE_LENGTH,
 };
 
 pub const fn rgb_lightness(r: u8, g: u8, b: u8) -> f32 {
@@ -79,6 +86,18 @@ impl AbsSpectrograph {
             .include_y(1.0)
             .show(ui, |plot_ui| plot_ui.line(egui::plot::Line::new(points)));
     }
+
+    pub fn write_to_csv(&self, path: impl AsRef<Path>, header: &str) -> std::io::Result<()> {
+        let wavelengths = (0..self.values.len())
+            .map(|x| x as f32 * self.step + self.start)
+            .collect_vec();
+        csv::write_f32_csv(
+            path,
+            ["wavelengths [nm]", "intensity"],
+            [&wavelengths, &self.values],
+            header,
+        )
+    }
 }
 
 pub struct RelativeSpectrum {
@@ -119,15 +138,31 @@ impl RelativeSpectrum {
             .include_y(1.0)
             .show(ui, |plot_ui| plot_ui.line(egui::plot::Line::new(points)));
     }
+
+    pub fn write_to_csv(&self, path: impl AsRef<Path>, header: &str) -> std::io::Result<()> {
+        let wavelengths = (0..self.values.len())
+            .map(|x| x as f32 * self.step + self.start)
+            .collect_vec();
+        csv::write_f32_csv(
+            path,
+            ["wavelengths [nm]", "intensity"],
+            [&wavelengths, &self.values],
+            header,
+        )
+    }
 }
 
 pub struct Meter {
     reference: Option<AbsSpectrograph>,
     current: Option<AbsSpectrograph>,
+    path: Option<PathBuf>,
+    comment: String,
     relative: bool,
     start: f32,
     stop: f32,
     step: f32,
+    save_next: bool,
+    file_dialogue: Option<FileDialog>,
 }
 
 impl Meter {
@@ -156,18 +191,54 @@ impl Meter {
         match self.current.as_ref() {
             Some(spec) => {
                 if self.relative {
-                    match self.current.as_ref() {
-                        Some(reference) => RelativeSpectrum::new(spec, reference).show(ui),
+                    match self.reference.as_ref() {
+                        Some(reference) => {
+                            let spec = RelativeSpectrum::new(spec, reference);
+                            spec.show(ui);
+                            if self.save_next {
+                                let header = csv::make_csv_header(&format!(
+                                    "{}\nthis is a relative spectrum",
+                                    self.comment
+                                ));
+                                match self.path.as_ref() {
+                                    Some(path) => match spec.write_to_csv(path, &header) {
+                                        Ok(_) => info!("saved file succesfully to {:?}", path),
+                                        Err(err) => error!("failed to save file Error: {}", err),
+                                    },
+                                    None => warn!(
+                                        "failed to save file, no path was set (shouldn't happen)"
+                                    ),
+                                }
+                                self.save_next = false
+                            }
+                        }
                         None => {
                             ui.label("no reference available");
                         }
                     }
                 } else {
+                    if self.save_next {
+                        let header = csv::make_csv_header(&format!(
+                            "{}\nthis is an unreliable absolute spectrum",
+                            self.comment
+                        ));
+                        match self.path.as_ref() {
+                            Some(path) => match spec.write_to_csv(path, &header) {
+                                Ok(_) => info!("saved file succesfully to {:?}", path),
+                                Err(err) => error!("failed to save file Error: {}", err),
+                            },
+                            None => {
+                                warn!("failed to save file, no path was set (shouldn't happen)")
+                            }
+                        }
+                        self.save_next = false
+                    }
                     spec.show(ui)
                 }
             }
             None => warn!("no current image available"),
         }
+        ui.ctx().request_repaint()
     }
 
     pub fn side_panel(&mut self, ui: &mut Ui) {
@@ -176,10 +247,28 @@ impl Meter {
         } else {
             ui.label("you have no reference");
         }
+        ui.checkbox(&mut self.relative, "relative");
         if ui.button("get reference").clicked() {
             match self.current.as_ref() {
                 Some(spec) => self.reference = Some(spec.clone()),
                 None => warn!("failed to load reference"),
+            }
+        }
+        ui.label("Additional comment for csv");
+        ui.text_edit_multiline(&mut self.comment);
+
+        if ui.button("save").clicked() {
+            let home = home::home_dir();
+            let mut dialogue = FileDialog::save_file(home);
+            dialogue.open();
+            self.file_dialogue = Some(dialogue);
+        }
+        if let Some(dialogue) = self.file_dialogue.as_mut() {
+            if dialogue.show(ui.ctx()).selected() {
+                if let Some(path) = dialogue.path() {
+                    self.path = Some(path);
+                    self.save_next = true;
+                };
             }
         }
     }
@@ -189,11 +278,15 @@ impl Default for Meter {
     fn default() -> Self {
         Self {
             reference: None,
+            comment: String::new(),
             current: None,
             relative: false,
             start: SMALLEST_WAVE_LENGTH as f32,
             stop: LARGEST_WAVE_LENGTH as f32,
             step: 1.0,
+            file_dialogue: None,
+            save_next: false,
+            path: None,
         }
     }
 }

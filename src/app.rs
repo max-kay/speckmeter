@@ -107,24 +107,25 @@ enum MainState {
 
 impl SpeckApp {
     /// Called once before the first frame.
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // This is also where you can customized the look at feel of egui using
         // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
-
-        // Load previous app state (if any).
-        // Note that you must enable the `persistence` feature for this to work.
-        // if let Some(storage) = cc.storage {
-        //     return eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default();
-        // }
-
-        Default::default()
+        
+        let mut app = Self::default();
+        if let Some(storage) = cc.storage {
+            app.calibration =  eframe::get_value(storage, "calibration").unwrap_or_default();
+        }
+        if app.camera_module.query().is_err(){
+            warn!("could not initialise cameras")
+        };
+        app
     }
 }
 
 impl eframe::App for SpeckApp {
     /// Called by the frame work to save state before shutdown.
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, eframe::APP_KEY, self);
+        eframe::set_value(storage, "calibration", &self.calibration);
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -165,14 +166,15 @@ impl SpeckApp {
                     ui.checkbox(&mut self.show_camera_opts, "Camera Module");
                     ui.checkbox(&mut self.show_logs, "Log window");
                     ui.checkbox(&mut self.show_calibration, "Calibration window");
+                    ui.checkbox(&mut self.show_meter_opts, "Meter Options")
                 });
                 ui.horizontal_centered(|ui| {
                     if ui
                         .selectable_value(&mut self.main_state, MainState::CameraView, "📷 Camera")
                         .clicked()
                     {
+                        self.show_none_but_logs();
                         self.show_camera_opts = true;
-                        self.show_calibration = false;
                     };
                     if ui
                         .selectable_value(
@@ -182,8 +184,8 @@ impl SpeckApp {
                         )
                         .clicked()
                     {
+                        self.show_none_but_logs();
                         self.show_calibration = true;
-                        self.show_camera_opts = false;
                     };
                     if ui
                         .selectable_value(
@@ -192,7 +194,10 @@ impl SpeckApp {
                             "Spectrograph",
                         )
                         .clicked()
-                    {}
+                    {
+                        self.show_none_but_logs();
+                        self.show_meter_opts = true;
+                    }
                 })
             })
         });
@@ -211,8 +216,7 @@ impl SpeckApp {
                             egui::Frame::canvas(ui.style()).show(ui, |ui| {
                                 draw_texture(&texture, ui);
                             });
-                            ui.ctx()
-                                .request_repaint_after(std::time::Duration::from_millis(10))
+                            ui.ctx().request_repaint()
                         }
                     });
                 } else if self.camera_module.has_camera() {
@@ -252,6 +256,7 @@ impl SpeckApp {
                         error!("failed to open camera stream graph view: {}", err)
                     }
                 }
+
                 match self.calibration.get_lines() {
                     Some(lines) => self.meter.main(
                         ui,
@@ -267,6 +272,12 @@ impl SpeckApp {
                 
             }
         }
+    }
+
+    fn show_none_but_logs(&mut self) {
+        self.show_calibration = false;
+        self.show_camera_opts = false;
+        self.show_meter_opts = false;
     }
 
     fn new_calibration_img(&mut self) {

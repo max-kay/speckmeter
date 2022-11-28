@@ -9,14 +9,14 @@ use crate::{
     LARGEST_WAVE_LENGTH, SMALLEST_WAVE_LENGTH,
 };
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Calibration {
     lines: Vec<(u16, Line)>,
     start: Option<(f32, f32)>,
     current_line: Option<Line>,
     current_text: String,
     horizontal_lines: bool,
-    diffraction: Diffraction,
+    distance: f32,
     #[serde(skip)]
     spectral: Option<SpectralLines>,
     #[serde(skip)]
@@ -30,8 +30,8 @@ impl Calibration {
             start: None,
             current_line: None,
             current_text: String::new(),
-            horizontal_lines: true,
-            diffraction: Diffraction::new(),
+            horizontal_lines: false,
+            distance: 2.0,
             spectral: None,
             show_generated: None,
         }
@@ -105,7 +105,7 @@ impl Calibration {
             )));
             Some(())
         } else {
-            error!("calibration is in valid");
+            error!("calibration is invalid");
             None
         }
     }
@@ -135,7 +135,7 @@ impl Calibration {
                 let step =
                     (LARGEST_WAVE_LENGTH - SMALLEST_WAVE_LENGTH) as f32 / (*line_count - 1) as f32;
                 for i in 0..*line_count {
-                    let wavelength = (SMALLEST_WAVE_LENGTH + i) as f32 * step;
+                    let wavelength = SMALLEST_WAVE_LENGTH as f32 + (i as f32 * step);
                     let screen_points = spectral
                         .line_with_wavelength(wavelength)
                         .to_points(to_screen);
@@ -232,7 +232,10 @@ impl Calibration {
             }
         });
         ui.label(format!("There are {} lines.", self.lines.len()));
-        self.diffraction.ui(ui);
+        ui.horizontal(|ui| {
+            ui.label("distance between diffrection lines in mm");
+            ui.add(egui::Slider::new(&mut self.distance, 0.0..=5.0));
+        });
         if self.spectral.is_some() {
             match self.show_generated.as_mut() {
                 Some(line_count) => {
@@ -254,33 +257,11 @@ impl Calibration {
                 self.show_generated = Some(10);
             }
         }
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub enum Diffraction {
-    Prism { refactive_idx: f32, angle: f32 },
-}
-
-impl Diffraction {
-    pub fn new() -> Self {
-        Self::Prism {
-            refactive_idx: 1.6,
-            angle: 60.0,
-        }
-    }
-
-    pub fn ui(&mut self, ui: &mut Ui) {
-        match self {
-            Diffraction::Prism {
-                refactive_idx,
-                angle,
-            } => {
-                ui.label("approximate refractive index");
-                ui.add(Slider::new(refactive_idx, 1.0..=3.0));
-                ui.label("the angle at the top of the prism in degrees");
-                ui.add(Slider::new(angle, 0.0..=180.0));
-            }
+        if ui.button("discard all lines").clicked() {
+            self.lines = Vec::new();
+            self.start = None;
+            self.current_line = None;
+            self.current_text = String::new();
         }
     }
 }
