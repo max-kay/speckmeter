@@ -1,15 +1,13 @@
-use std::{
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use egui::{
     plot::{Plot, PlotPoints},
     Ui,
 };
-use egui_file::FileDialog;
 use itertools::Itertools;
 use line_drawing::XiaolinWu;
 use log::{error, info, warn};
+use native_dialog::FileDialog;
 use v4l::io::traits::CaptureStream;
 
 use crate::{
@@ -63,6 +61,17 @@ impl AbsSpectrograph {
             step,
             values,
         }
+    }
+
+    pub fn add(&mut self, other: &Self) {
+        assert_eq!(self.start, other.start);
+        assert_eq!(self.step, other.step);
+        assert_eq!(self.stop, other.stop);
+        self.values = self.values.iter().zip(other.values.iter()).map(|(x1, x2)| x1 + x2).collect();
+    } 
+
+    pub fn scale(&mut self, factor: f32) {
+        self.values.iter_mut().for_each(|x| *x *= factor)
     }
 
     pub fn compare(&self, other: &Self) -> bool {
@@ -153,16 +162,18 @@ impl RelativeSpectrum {
 }
 
 pub struct Meter {
+    take_average: usize,
     reference: Option<AbsSpectrograph>,
     current: Option<AbsSpectrograph>,
-    path: Option<PathBuf>,
-    comment: String,
+    spec_buf: Vec<AbsSpectrograph>,
     relative: bool,
     start: f32,
     stop: f32,
     step: f32,
+    path: Option<PathBuf>,
     save_next: bool,
-    file_dialogue: Option<FileDialog>,
+    filename: String,
+    comment: String,
 }
 
 impl Meter {
@@ -180,7 +191,7 @@ impl Meter {
                         .expect("image should be ok")
                         .into();
 
-                    self.current = Some(AbsSpectrograph::from_img(
+                    self.spec_buf.push(AbsSpectrograph::from_img(
                         &img, lines, self.start, self.stop, self.step,
                     ));
                 }
@@ -188,6 +199,12 @@ impl Meter {
             },
             None => error!("not camera stream exists"),
         }
+
+        if self.spec_buf.len()>= self.take_average{
+            self.current = Some(average_spectrograph(&self.spec_buf));
+            self.spec_buf = Vec::new();
+        }
+
         match self.current.as_ref() {
             Some(spec) => {
                 if self.relative {
@@ -242,33 +259,48 @@ impl Meter {
     }
 
     pub fn side_panel(&mut self, ui: &mut Ui) {
-        if self.reference.is_some() {
-            ui.label("you have a reference");
-        } else {
-            ui.label("you have no reference");
-        }
-        ui.checkbox(&mut self.relative, "relative");
-        if ui.button("get reference").clicked() {
+        if ui.button("take reference").clicked() {
             match self.current.as_ref() {
-                Some(spec) => self.reference = Some(spec.clone()),
+                Some(spec) => {
+                    self.reference = Some(spec.clone());
+                    self.relative = true
+                }
                 None => warn!("failed to load reference"),
             }
         }
+
+        if self.reference.is_some() {
+            ui.checkbox(&mut self.relative, "relative");
+        }
+
+        ui.add(egui::Slider::new(&mut self.take_average, 0..=100));
+
+
         ui.label("Additional comment for csv");
         ui.text_edit_multiline(&mut self.comment);
 
+        ui.label("filename:");
+        ui.text_edit_singleline(&mut self.filename);
+
         if ui.button("save").clicked() {
-            let home = home::home_dir();
-            let mut dialogue = FileDialog::save_file(home);
-            dialogue.open();
-            self.file_dialogue = Some(dialogue);
-        }
-        if let Some(dialogue) = self.file_dialogue.as_mut() {
-            if dialogue.show(ui.ctx()).selected() {
-                if let Some(path) = dialogue.path() {
-                    self.path = Some(path);
-                    self.save_next = true;
-                };
+            let dialog_result = match home::home_dir() {
+                Some(home) => FileDialog::new()
+                    .set_location(&home)
+                    .set_filename(&self.filename)
+                    .show_save_single_file(),
+                None => FileDialog::new()
+                    .set_filename(&self.filename)
+                    .show_save_single_file(),
+            };
+            match dialog_result {
+                Ok(opt) => match opt {
+                    Some(buf) => {
+                        self.path = Some(buf);
+                        self.save_next = true;
+                    }
+                    None => warn!("no path was returned"),
+                },
+                Err(err) => warn!("could not get location, Error: {}", err),
             }
         }
     }
@@ -277,6 +309,8 @@ impl Meter {
 impl Default for Meter {
     fn default() -> Self {
         Self {
+            spec_buf: Vec::new(),
+            take_average: 1,
             reference: None,
             comment: String::new(),
             current: None,
@@ -284,9 +318,20 @@ impl Default for Meter {
             start: SMALLEST_WAVE_LENGTH as f32,
             stop: LARGEST_WAVE_LENGTH as f32,
             step: 1.0,
-            file_dialogue: None,
             save_next: false,
             path: None,
+            filename: format!("{}.csv", chrono::Local::now().format("%Y_%m_%d_%H_%M")),
         }
     }
+}
+
+
+fn average_spectrograph(graphs: &Vec<AbsSpectrograph>) -> AbsSpectrograph {
+    let factor = 1.0 / graphs.len() as f32;
+    let mut graph1 = graphs[0].clone();
+    for graph in &graphs[1..]{
+        graph1.add(graph)
+    }
+    graph1.scale(factor);
+    graph1
 }

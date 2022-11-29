@@ -6,9 +6,10 @@
 mod app;
 mod calib;
 mod cam;
+mod csv;
 mod lin_reg;
 mod meter;
-mod csv;
+mod line_tracer;
 pub use app::SpeckApp;
 
 pub const SMALLEST_WAVE_LENGTH: u16 = 380;

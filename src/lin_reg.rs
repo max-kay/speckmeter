@@ -1,4 +1,4 @@
-pub fn lin_reg(xs: Vec<f32>, yss:&[Vec<f32>]) -> Regression {
+pub fn lin_reg(xs: Vec<f32>, yss: &[Vec<f32>]) -> Regression {
     let mean_x = xs.iter().sum::<f32>() / xs.len() as f32;
     let mean_ys: Vec<f32> = yss
         .iter()

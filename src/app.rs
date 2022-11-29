@@ -110,12 +110,12 @@ impl SpeckApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // This is also where you can customized the look at feel of egui using
         // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
-        
+
         let mut app = Self::default();
         if let Some(storage) = cc.storage {
-            app.calibration =  eframe::get_value(storage, "calibration").unwrap_or_default();
+            app.calibration = eframe::get_value(storage, "calibration").unwrap_or_default();
         }
-        if app.camera_module.query().is_err(){
+        if app.camera_module.query().is_err() {
             warn!("could not initialise cameras")
         };
         app
@@ -267,9 +267,8 @@ impl SpeckApp {
                     None => {
                         ui.label("no calibration lines found");
                         warn!("tried to get calibration lines without generating them")
-                    },
+                    }
                 }
-                
             }
         }
     }

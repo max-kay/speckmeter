@@ -240,8 +240,15 @@ fn update_ctrl(
         control::Type::Integer => {
             if let control::Value::Integer(mut val) = control.value {
                 ui.horizontal(|ui| {
-
-                    if ui.add(Slider::new(&mut val, *minimum..=*maximum).clamp_to_range(true).integer().step_by(*step as f64)).drag_released() {
+                    if ui
+                        .add(
+                            Slider::new(&mut val, *minimum..=*maximum)
+                                .clamp_to_range(true)
+                                .integer()
+                                .step_by(*step as f64),
+                        )
+                        .drag_released()
+                    {
                         let new = Control {
                             id: *id,
                             value: control::Value::Integer(val),
@@ -257,9 +264,7 @@ fn update_ctrl(
                             value: control::Value::Integer(*default),
                         };
                         match set_control(cam, new) {
-                            Ok(_) => {
-                                control.value = control::Value::Integer(*default)
-                            }
+                            Ok(_) => control.value = control::Value::Integer(*default),
                             Err(err) => error!("could not set default {}", err),
                         }
                     }
