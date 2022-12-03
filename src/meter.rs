@@ -12,12 +12,12 @@ use v4l::io::traits::CaptureStream;
 
 use crate::{
     app::{make_img_buf, Image, CAMERA_STREAM},
-    calib::SpectralLines,
-    csv, LARGEST_WAVE_LENGTH, SMALLEST_WAVE_LENGTH,
+    calib::Calibration,
+    csv, LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
 
 pub const fn rgb_lightness(r: u8, g: u8, b: u8) -> f32 {
-    (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32) / 255.0
+    (r as f32 + g as f32 + b as f32) / (255.0 * 3.0)
 }
 
 #[derive(Clone)]
@@ -29,15 +29,21 @@ pub struct AbsSpectrograph {
 }
 
 impl AbsSpectrograph {
-    pub fn from_img(img: &Image, lines: &SpectralLines, start: f32, stop: f32, step: f32) -> Self {
+    pub fn from_img(
+        img: &Image,
+        calib: &mut Calibration,
+        start: f32,
+        stop: f32,
+        step: f32,
+    ) -> Option<Self> {
         let width = img.width as f32;
         let height = img.height as f32;
 
-        let mut values = Vec::with_capacity(((stop - start) / step) as usize);
+        let lines = calib.get_lines(start, stop, step)?;
 
-        let mut current_wl = start;
-        while current_wl <= stop {
-            let line = lines.line_with_wavelength(current_wl);
+        let mut values = Vec::with_capacity(lines.len());
+
+        for line in lines.iter() {
             let start = line.start;
             let end = line.end;
 
@@ -48,27 +54,32 @@ impl AbsSpectrograph {
                 (start.0 * width, start.1 * height),
                 (end.0 * width, end.1 * height),
             ) {
-                let (r, g, b) = img.get(x as usize, y as usize);
-                total += rgb_lightness(r, g, b) * s;
-                total_weights += s;
+                if let Some((r, g, b)) = img.get(x as usize, y as usize) {
+                    total += rgb_lightness(r, g, b) * s;
+                    total_weights += s;
+                }
             }
             values.push(total / total_weights);
-            current_wl += step;
         }
-        Self {
+        Some(Self {
             start,
             stop,
             step,
             values,
-        }
+        })
     }
 
     pub fn add(&mut self, other: &Self) {
         assert_eq!(self.start, other.start);
         assert_eq!(self.step, other.step);
         assert_eq!(self.stop, other.stop);
-        self.values = self.values.iter().zip(other.values.iter()).map(|(x1, x2)| x1 + x2).collect();
-    } 
+        self.values = self
+            .values
+            .iter()
+            .zip(other.values.iter())
+            .map(|(x1, x2)| x1 + x2)
+            .collect();
+    }
 
     pub fn scale(&mut self, factor: f32) {
         self.values.iter_mut().for_each(|x| *x *= factor)
@@ -182,7 +193,7 @@ impl Meter {
         ui: &mut Ui,
         current_width: u32,
         current_height: u32,
-        lines: &SpectralLines,
+        calib: &mut Calibration,
     ) {
         match CAMERA_STREAM.lock().as_mut() {
             Some(stream) => match stream.next() {
@@ -190,17 +201,20 @@ impl Meter {
                     let img: Image = make_img_buf(buf, current_width, current_height)
                         .expect("image should be ok")
                         .into();
-
-                    self.spec_buf.push(AbsSpectrograph::from_img(
-                        &img, lines, self.start, self.stop, self.step,
-                    ));
+                    if let Some(spec) =
+                        AbsSpectrograph::from_img(&img, calib, self.start, self.stop, self.step)
+                    {
+                        self.spec_buf.push(spec);
+                    } else {
+                        warn!("could not generate spectrograph")
+                    }
                 }
                 Err(err) => error!("could not load image: {}", err),
             },
             None => error!("not camera stream exists"),
         }
 
-        if self.spec_buf.len()>= self.take_average{
+        if self.spec_buf.len() >= self.take_average {
             self.current = Some(average_spectrograph(&self.spec_buf));
             self.spec_buf = Vec::new();
         }
@@ -275,7 +289,6 @@ impl Meter {
 
         ui.add(egui::Slider::new(&mut self.take_average, 0..=100));
 
-
         ui.label("Additional comment for csv");
         ui.text_edit_multiline(&mut self.comment);
 
@@ -315,8 +328,8 @@ impl Default for Meter {
             comment: String::new(),
             current: None,
             relative: false,
-            start: SMALLEST_WAVE_LENGTH as f32,
-            stop: LARGEST_WAVE_LENGTH as f32,
+            start: SMALLEST_WAVELENGTH as f32,
+            stop: LARGEST_WAVELENGTH as f32,
             step: 1.0,
             save_next: false,
             path: None,
@@ -325,11 +338,10 @@ impl Default for Meter {
     }
 }
 
-
 fn average_spectrograph(graphs: &Vec<AbsSpectrograph>) -> AbsSpectrograph {
     let factor = 1.0 / graphs.len() as f32;
     let mut graph1 = graphs[0].clone();
-    for graph in &graphs[1..]{
+    for graph in &graphs[1..] {
         graph1.add(graph)
     }
     graph1.scale(factor);

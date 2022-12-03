@@ -10,7 +10,8 @@ mod csv;
 mod lin_reg;
 mod meter;
 mod line_tracer;
+mod line_search;
 pub use app::SpeckApp;
 
-pub const SMALLEST_WAVE_LENGTH: u16 = 380;
-pub const LARGEST_WAVE_LENGTH: u16 = 750;
+pub const SMALLEST_WAVELENGTH: u16 = 380;
+pub const LARGEST_WAVELENGTH: u16 = 750;

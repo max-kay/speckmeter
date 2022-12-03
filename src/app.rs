@@ -45,11 +45,19 @@ impl Image {
         self.texture.as_ref().unwrap()
     }
 
-    pub fn get(&self, x: usize, y: usize) -> (u8, u8, u8) {
+    pub fn get(&self, x: usize, y: usize) -> Option<(u8, u8, u8)> {
         assert!(x < self.width);
         assert!(y < self.height);
         let index = 3 * (y * self.width + x);
-        (self.data[index], self.data[index + 1], self.data[index + 2])
+        Some((
+            *self.data.get(index)?,
+            *self.data.get(index + 1)?,
+            *self.data.get(index + 2)?,
+        ))
+    }
+
+    pub fn aspect_ratio(&self) -> f32 {
+        self.width as f32 / self.height as f32
     }
 }
 
@@ -139,7 +147,7 @@ impl eframe::App for SpeckApp {
 
         if self.show_calibration {
             egui::SidePanel::right("calibration").show(ctx, |ui| {
-                self.calibration.side_view(ui);
+                self.calibration.side_panel(ui);
                 if ui.button("new image").clicked() {
                     self.new_calibration_img()
                 }
@@ -173,7 +181,7 @@ impl SpeckApp {
                         .selectable_value(&mut self.main_state, MainState::CameraView, "📷 Camera")
                         .clicked()
                     {
-                        self.show_none_but_logs();
+                        self.close_side_panels();
                         self.show_camera_opts = true;
                     };
                     if ui
@@ -184,7 +192,7 @@ impl SpeckApp {
                         )
                         .clicked()
                     {
-                        self.show_none_but_logs();
+                        self.close_side_panels();
                         self.show_calibration = true;
                     };
                     if ui
@@ -195,7 +203,7 @@ impl SpeckApp {
                         )
                         .clicked()
                     {
-                        self.show_none_but_logs();
+                        self.close_side_panels();
                         self.show_meter_opts = true;
                     }
                 })
@@ -231,20 +239,27 @@ impl SpeckApp {
                 *CAMERA_STREAM.lock() = None;
                 match self.calibration_img.as_mut() {
                     None => {
-                        ui.strong("there is no calibration image");
-                        if ui.button("go to camera").clicked() {
-                            self.main_state = MainState::CameraView;
-                            self.show_calibration = true;
-                            self.show_camera_opts = false;
-                        }
+                        ui.horizontal_centered(|ui| {
+                            ui.strong("there is no calibration image");
+                            if ui.button("go to camera").clicked() {
+                                self.close_side_panels();
+                                self.show_camera_opts = true;
+                                self.main_state = MainState::CameraView;
+                            }
+                            if ui.button("take calibration image").clicked() {
+                                self.new_calibration_img()
+                            }
+                        });
                     }
                     Some(img) => {
+                        let aspect_ratio = img.aspect_ratio();
                         let texture = img.get_texture(ui);
                         ui.vertical_centered(|ui| {
                             let style = ui.style();
                             Frame::canvas(style).show(ui, |ui| {
                                 let (to_screen, response) = draw_texture(texture, ui);
-                                self.calibration.main_view(ui, to_screen, response);
+                                self.calibration
+                                    .main_view(ui, to_screen, aspect_ratio, response);
                             });
                         });
                     }
@@ -257,23 +272,17 @@ impl SpeckApp {
                     }
                 }
 
-                match self.calibration.get_lines() {
-                    Some(lines) => self.meter.main(
-                        ui,
-                        self.camera_module.width(),
-                        self.camera_module.height(),
-                        lines,
-                    ),
-                    None => {
-                        ui.label("no calibration lines found");
-                        warn!("tried to get calibration lines without generating them")
-                    }
-                }
+                self.meter.main(
+                    ui,
+                    self.camera_module.width(),
+                    self.camera_module.height(),
+                    &mut self.calibration,
+                )
             }
         }
     }
 
-    fn show_none_but_logs(&mut self) {
+    fn close_side_panels(&mut self) {
         self.show_calibration = false;
         self.show_camera_opts = false;
         self.show_meter_opts = false;

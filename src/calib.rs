@@ -1,12 +1,13 @@
 use eframe::emath::RectTransform;
-use egui::{self, emath, Align2, Color32, Pos2, Response, Slider, Ui};
+use egui::{self, emath, Align2, Color32, Pos2, Rect, Response, Slider, Ui};
 use itertools::Itertools;
 use log::{error, warn};
-use std::mem::swap;
+use std::{f32::consts::PI, mem::swap};
 
 use crate::{
-    lin_reg::{lin_reg, Regression},
-    LARGEST_WAVE_LENGTH, SMALLEST_WAVE_LENGTH,
+    lin_reg,
+    line_search::{self, Cost, Gradient},
+    LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -16,11 +17,13 @@ pub struct Calibration {
     current_line: Option<Line>,
     current_text: String,
     horizontal_lines: bool,
-    distance: f32,
-    #[serde(skip)]
-    spectral: Option<SpectralLines>,
+    grating_const: f32,
+    angle: f32,
+    distance_to_sensor: f32,
+    sensor_width: f32,
     #[serde(skip)]
     show_generated: Option<u16>,
+    spectral: Option<SpectralLines>,
 }
 
 impl Calibration {
@@ -31,9 +34,12 @@ impl Calibration {
             current_line: None,
             current_text: String::new(),
             horizontal_lines: false,
-            distance: 2.0,
-            spectral: None,
+            grating_const: 500.0,
             show_generated: None,
+            spectral: None,
+            angle: 17.5,
+            distance_to_sensor: 1.0,
+            sensor_width: 0.5,
         }
     }
 
@@ -54,9 +60,9 @@ impl Calibration {
         }
     }
 
-    pub fn add_new_wave_length(&mut self, wave_length: u16) {
+    pub fn add_new_wavelength(&mut self, wavelength: u16) {
         match self.current_line {
-            Some(line) => self.lines.push((wave_length, line)),
+            Some(line) => self.lines.push((wavelength, line)),
             None => warn!("tried to add wave length with no active line"),
         }
         self.current_line = None;
@@ -82,27 +88,13 @@ impl Calibration {
 
     fn generate_regression(&mut self) -> Option<()> {
         if self.validate() && self.lines.len() > 1 {
-            let wavelengths: Vec<f32> = self
-                .lines
-                .iter()
-                .map(|(wavelength, _)| *wavelength as f32)
-                .collect();
-            let coordinates = [
-                self.lines
-                    .iter()
-                    .map(|(_, line)| line.start.0)
-                    .collect_vec(),
-                self.lines
-                    .iter()
-                    .map(|(_, line)| line.start.1)
-                    .collect_vec(),
-                self.lines.iter().map(|(_, line)| line.end.0).collect_vec(),
-                self.lines.iter().map(|(_, line)| line.end.1).collect_vec(),
-            ];
-            self.spectral = Some(SpectralLines::from_lin_reg(lin_reg(
-                wavelengths,
-                &coordinates,
-            )));
+            self.spectral = SpectralLines::new(
+                self.lines.clone(),
+                self.grating_const,
+                self.angle,
+                self.distance_to_sensor,
+                self.sensor_width,
+            );
             Some(())
         } else {
             error!("calibration is invalid");
@@ -110,15 +102,22 @@ impl Calibration {
         }
     }
 
-    pub fn get_lines(&mut self) -> Option<&SpectralLines> {
+    pub fn get_lines(&mut self, start: f32, stop: f32, step: f32) -> Option<Vec<Line>> {
         if self.spectral.is_none() {
-            match self.generate_regression() {
-                Some(_) => self.spectral.as_ref(),
-                None => None,
-            }
-        } else {
-            self.spectral.as_ref()
+            self.generate_regression()?
         }
+        let mut current_wl = start;
+        let mut lines = Vec::with_capacity(((stop - start) / step) as usize);
+        while current_wl < stop {
+            lines.push(
+                self.spectral
+                    .as_ref()
+                    .unwrap()
+                    .line_with_wavelength(current_wl),
+            );
+            current_wl += step;
+        }
+        Some(lines)
     }
 }
 
@@ -128,14 +127,32 @@ const GEN_LINE_STROKE: (f32, Color32) = (2.0, Color32::RED);
 const TEXT_COLOR: Color32 = Color32::WHITE;
 
 impl Calibration {
-    pub fn main_view(&mut self, ui: &mut Ui, to_screen: emath::RectTransform, response: Response) {
+    pub fn main_view(
+        &mut self,
+        ui: &mut Ui,
+        to_screen: emath::RectTransform,
+        aspect_ratio: f32,
+        response: Response,
+    ) {
+        let top_left_screen = to_screen * Pos2 { x: 0.0, y: 0.0 };
+        let bottom_right_screen = to_screen
+            * Pos2 {
+                x: aspect_ratio,
+                y: 1.0,
+            };
+        // this allows me to work in normalised coordiantes, [0, 1]x[0, 1]
+        let to_screen = emath::RectTransform::from_to(
+            Rect::from_min_max(top_left_screen, bottom_right_screen),
+            Rect::from_x_y_ranges(0.0..=1.0, 0.0..=1.0),
+        );
         let to_picture = to_screen.inverse();
+        // Show generated lines if they exist and line_count is set and then skip the rest of this fn
         if let Some(line_count) = self.show_generated.as_ref() {
             if let Some(spectral) = self.spectral.as_ref() {
                 let step =
-                    (LARGEST_WAVE_LENGTH - SMALLEST_WAVE_LENGTH) as f32 / (*line_count - 1) as f32;
+                    (LARGEST_WAVELENGTH - SMALLEST_WAVELENGTH) as f32 / (*line_count - 1) as f32;
                 for i in 0..*line_count {
-                    let wavelength = SMALLEST_WAVE_LENGTH as f32 + (i as f32 * step);
+                    let wavelength = SMALLEST_WAVELENGTH as f32 + (i as f32 * step);
                     let screen_points = spectral
                         .line_with_wavelength(wavelength)
                         .to_points(to_screen);
@@ -151,23 +168,27 @@ impl Calibration {
                 return;
             }
         }
-        for (wave_length, line) in self.lines.iter() {
+        // paint lines drawn by the user and its corresponding wavelength
+        for (wavelength, line) in self.lines.iter() {
             let points = line.to_points(to_screen);
             ui.painter().line_segment(points, DRAWN_LINE_STROKE);
             ui.painter().text(
                 points[0],
                 Align2::RIGHT_CENTER,
-                wave_length.to_string(),
+                wavelength.to_string(),
                 Default::default(),
                 TEXT_COLOR,
             );
         }
+        // line saveing
         match self.current_line {
             None => {
+                // if there is no line being worked on:
                 if !self.current_text.is_empty() {
                     self.current_text = String::new()
                 }
                 if response.drag_started() {
+                    // if a line is started to be drawn save the starting point
                     self.start_line(
                         to_picture
                             * response
@@ -175,6 +196,7 @@ impl Calibration {
                                 .expect("a drag has started so interaction should exist"),
                     )
                 } else if response.dragged() {
+                    // paint the line currently being draged
                     let screen_start =
                         to_screen * self.start.expect("there should be an active line").into();
                     ui.painter().line_segment(
@@ -187,6 +209,7 @@ impl Calibration {
                         ACTIVE_LINE_STROKE,
                     )
                 } else if response.drag_released() {
+                    // save the end point of the line
                     self.end_line(
                         to_picture
                             * response
@@ -196,6 +219,7 @@ impl Calibration {
                 }
             }
             Some(line) => {
+                // if the line has finnished drawing open a window to enter the corresponding wavelength
                 ui.painter()
                     .line_segment(line.to_points(to_screen), DRAWN_LINE_STROKE);
                 egui::Window::new("Add Wave length to last line").show(ui.ctx(), |ui| {
@@ -204,7 +228,7 @@ impl Calibration {
                         ui.horizontal(|ui| {
                             if ui.button("OK").clicked() {
                                 match self.current_text.parse::<u16>() {
-                                    Ok(val) => self.add_new_wave_length(val),
+                                    Ok(val) => self.add_new_wavelength(val),
                                     Err(_) => {
                                         self.current_text =
                                             "this has to be a valid integer".to_string()
@@ -221,7 +245,7 @@ impl Calibration {
         }
     }
 
-    pub fn side_view(&mut self, ui: &mut Ui) {
+    pub fn side_panel(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.label("Lines with the same wavelength are");
             if ui.radio(self.horizontal_lines, "horizontal").clicked() {
@@ -232,10 +256,6 @@ impl Calibration {
             }
         });
         ui.label(format!("There are {} lines.", self.lines.len()));
-        ui.horizontal(|ui| {
-            ui.label("distance between diffrection lines in mm");
-            ui.add(egui::Slider::new(&mut self.distance, 0.0..=5.0));
-        });
         if self.spectral.is_some() {
             match self.show_generated.as_mut() {
                 Some(line_count) => {
@@ -263,10 +283,20 @@ impl Calibration {
             self.current_line = None;
             self.current_text = String::new();
         }
+
+        ui.strong("Spectrometer settings");
+        ui.label("Angle in degrees");
+        ui.add(Slider::new(&mut self.angle, 0.0..=90.0));
+        ui.label("Distance to sensor in mm");
+        ui.add(Slider::new(&mut self.distance_to_sensor, 0.0..=100.0));
+        ui.label("Sensor width in mm");
+        ui.add(Slider::new(&mut self.sensor_width, 0.0..=10.0));
+        ui.label("Grating constant in lines per mm");
+        ui.add(Slider::new(&mut self.grating_const, 0.0..=1000.0));
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, Copy)]
 pub struct Line {
     pub start: (f32, f32),
     pub end: (f32, f32),
@@ -288,45 +318,131 @@ impl Line {
             swap(&mut self.start, &mut self.end)
         }
     }
+
+    pub fn del_y(&self) -> f32 {
+        self.end.1 - self.start.0
+    }
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SpectralLines {
-    start_x: Box<dyn Fn(f32) -> f32>,
-    start_y: Box<dyn Fn(f32) -> f32>,
-    end_x: Box<dyn Fn(f32) -> f32>,
-    end_y: Box<dyn Fn(f32) -> f32>,
+    grating_const: f32,
+    top_line: Line,
+    top_param: Vec<f32>,
+    bottom_line: Line,
+    bottom_param: Vec<f32>,
 }
 
 impl SpectralLines {
-    pub fn from_lin_reg(reg: Regression) -> Self {
-        let Regression { slopes, y_offsets } = reg;
+    pub fn new(
+        measure: Vec<(u16, Line)>,
+        grating_const: f32,
+        angle: f32,
+        dist: f32,
+        sensor_width: f32,
+    ) -> Option<Self> {
+        let a = dbg!((angle * PI / 360.0).tan());
+        let b = dbg!(dist / sensor_width);
+        let c = 0.5;
 
-        let slopes0 = slopes[0];
-        let y_offsets0 = y_offsets[0];
-        let slopes1 = slopes[1];
-        let y_offsets1 = y_offsets[1];
-        let slopes2 = slopes[2];
-        let y_offsets2 = y_offsets[2];
-        let slopes3 = slopes[3];
-        let y_offsets3 = y_offsets[3];
-        Self {
-            start_x: Box::new(move |lambda| slopes0 * lambda + y_offsets0),
-            start_y: Box::new(move |lambda| slopes1 * lambda + y_offsets1),
-            end_x: Box::new(move |lambda| slopes2 * lambda + y_offsets2),
-            end_y: Box::new(move |lambda| slopes3 * lambda + y_offsets3),
+        let init_params = vec![a, b, c];
+
+        let rs = measure
+            .iter()
+            .map(|(wl, _)| *wl as f32 * grating_const / 1_000_000.0)
+            .collect_vec();
+
+        let x0s = measure.iter().map(|(_, line)| line.start.0).collect_vec();
+        let y0s = measure.iter().map(|(_, line)| line.start.1).collect_vec();
+        let x1s = measure.iter().map(|(_, line)| line.end.0).collect_vec();
+        let y1s = measure.iter().map(|(_, line)| line.end.1).collect_vec();
+
+        let (top_line, top_param) = gen_param(&x0s, &y0s, &rs, init_params.clone());
+        let (bottom_line, bottom_param) = gen_param(&x1s, &y1s, &rs, init_params);
+
+        Some(Self {
+            top_line,
+            top_param,
+            bottom_line,
+            bottom_param,
+            grating_const,
+        })
+    }
+
+    pub fn line_with_wavelength(&self, lambda: f32) -> Line {
+        let top_normed_x = self.normed_x(lambda, &self.top_param);
+        let bottom_normed_x = self.normed_x(lambda, &self.bottom_param);
+        Line {
+            start: (top_normed_x, self.top_line.del_y() * top_normed_x),
+            end: (bottom_normed_x, self.bottom_line.del_y() * bottom_normed_x),
         }
     }
 
-    pub fn line_with_wavelength(&self, wavelength: f32) -> Line {
-        Line {
-            start: (
-                self.start_x.call((wavelength,)),
-                self.start_y.call((wavelength,)),
-            ),
-            end: (
-                self.end_x.call((wavelength,)),
-                self.end_y.call((wavelength,)),
-            ),
-        }
+    fn normed_x(&self, lambda: f32, parameters: &[f32]) -> f32 {
+        let a = parameters[0];
+        let b = parameters[1];
+        let c = parameters[2];
+        let r = lambda * self.grating_const / 1_000_000.0;
+        let root = (1.0 - r * r).sqrt();
+        b * ((a * root - r) / (root + a * r)) + c
+    }
+}
+
+fn gen_param(xs: &[f32], ys: &[f32], rs: &[f32], init_param: Vec<f32>) -> (Line, Vec<f32>) {
+    let lin_reg::Regression { slope, y_offset } = lin_reg::lin_reg(xs, ys);
+    let line = Line {
+        start: (0.0, y_offset),
+        end: (1.0, y_offset + slope),
+    };
+    let norm_xs = xs
+        .iter()
+        .zip(ys)
+        .map(|(x0, y0)| (y0 + x0 / slope - y_offset) / (slope + 1.0 / slope));
+
+    let problem = FittingProblem {
+        data: norm_xs.zip(rs.iter().cloned()).collect_vec(),
+    };
+    let param = line_search::search_minimum(problem, init_param, 4000);
+    (line, param)
+}
+
+struct FittingProblem {
+    data: Vec<(f32, f32)>, // projected_x, ratio (lambda / d), where d = distance between lines on grating
+}
+
+impl Cost for FittingProblem {
+    fn cost(&self, parameters: Vec<f32>) -> f32 {
+        let a = parameters[0];
+        let b = parameters[1];
+        let c = parameters[2];
+        self.data.iter().fold(0.0, |acc, (x, r)| {
+            let root = (1.0 - r * r).sqrt();
+            acc + (b * ((a * root - r) / (root + a * r)) + c - x).powi(2)
+        })
+    }
+}
+
+impl Gradient for FittingProblem {
+    fn gradient(&self, parameters: Vec<f32>) -> Vec<f32> {
+        let a = parameters[0];
+        let b = parameters[1];
+        let c = parameters[2];
+        self.data
+            .iter()
+            .fold([0.0, 0.0, 0.0], |acc, (x, r)| {
+                let [mut da, mut db, mut dc] = acc;
+                let root = (1.0 - r * r).sqrt();
+                let prefactor = 2.0 * (b * ((a * root - r) / (root + a * r)) + c - x);
+
+                da += prefactor * b * (root * (root + a * r) - (a * root - r) * r)
+                    / (root + a * r).powi(2);
+
+                db += prefactor * (a * root - r) / (root + a * r);
+
+                dc += prefactor;
+
+                [da, db, dc]
+            })
+            .into()
     }
 }
