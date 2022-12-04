@@ -8,11 +8,10 @@ use itertools::Itertools;
 use line_drawing::XiaolinWu;
 use log::{error, info, warn};
 use native_dialog::FileDialog;
-use v4l::io::traits::CaptureStream;
 
 use crate::{
     calibration_module::Calibration,
-    camera_module::{make_img_buf, my_image::Image, CAMERA_STREAM},
+    camera_module::{Image, CameraStream},
     csv, LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
 
@@ -188,30 +187,15 @@ pub struct Meter {
 }
 
 impl Meter {
-    pub fn main(
-        &mut self,
-        ui: &mut Ui,
-        current_width: u32,
-        current_height: u32,
-        calib: &mut Calibration,
-    ) {
-        match CAMERA_STREAM.lock().unwrap().as_mut() {
-            Some(stream) => match stream.next() {
-                Ok((buf, _)) => {
-                    let img: Image = make_img_buf(buf, current_width, current_height)
-                        .expect("image should be ok")
-                        .into();
-                    if let Some(spec) =
-                        AbsSpectrograph::from_img(&img, calib, self.start, self.stop, self.step)
-                    {
-                        self.spec_buf.push(spec);
-                    } else {
-                        warn!("could not generate spectrograph")
-                    }
-                }
-                Err(err) => error!("could not load image: {}", err),
-            },
-            None => error!("not camera stream exists"),
+    pub fn main(&mut self, ui: &mut Ui, width: u32, height: u32, calib: &mut Calibration) {
+        if let Some(img) = CameraStream::get_img(width, height) {
+            if let Some(spec) =
+                AbsSpectrograph::from_img(&img, calib, self.start, self.stop, self.step)
+            {
+                self.spec_buf.push(spec);
+            } else {
+                warn!("could not generate spectrograph")
+            }
         }
 
         if self.spec_buf.len() >= self.take_average {

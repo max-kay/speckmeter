@@ -398,7 +398,7 @@ pub fn normed_x(lambda_times_grating_const: f32, parameters: &[f32]) -> f32 {
 }
 
 fn gen_param(xs: &[f32], ys: &[f32], rs: &[f32], init_param: Vec<f32>) -> (Line, Vec<f32>) {
-    let fitting::LinearRegression{ slope, y_offset } = fitting::lin_reg(xs, ys);
+    let fitting::LinearRegression { slope, y_offset } = fitting::lin_reg(xs, ys);
     let line = Line {
         start: (0.0, y_offset),
         end: (1.0, y_offset + slope),

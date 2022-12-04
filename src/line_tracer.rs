@@ -1,5 +1,7 @@
 use egui::{DragValue, Ui};
 
+use crate::calibration_module::Calibration;
+
 pub struct LineTracer {
     lines_to_trace: Vec<f32>,
     references: Vec<f32>,
@@ -11,7 +13,7 @@ pub struct LineTracer {
 impl LineTracer {
     pub fn main(&mut self, ui: &mut Ui) {}
 
-    pub fn side_panel(&mut self, ui: &mut Ui) {
+    pub fn side_panel(&mut self, ui: &mut Ui, calib: &Calibration) {
         ui.label("trace wavelengths");
         for val in &mut self.lines_to_trace {
             ui.add(DragValue::new(val));
@@ -21,13 +23,13 @@ impl LineTracer {
         }
 
         if ui.button("Take reference").clicked() {
-            self.take_reference()
+            self.take_reference(calib)
         }
     }
 }
 
 impl LineTracer {
-    pub fn take_reference(&mut self) {
+    pub fn take_reference(&mut self, calib: &Calibration) {
         todo!()
     }
 }

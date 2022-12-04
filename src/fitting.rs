@@ -60,7 +60,7 @@ where
 }
 
 fn add(x1: Vec<f32>, x2: Vec<f32>) -> Vec<f32> {
-    assert_eq!(x1.len(), x2.len());
+    // assert_eq!(x1.len(), x2.len()); TODO is this  needed
     x1.iter().zip(x2.iter()).map(|(x1, x2)| x1 + x2).collect()
 }
 
@@ -69,17 +69,15 @@ pub fn scale(x: Vec<f32>, factor: f32) -> Vec<f32> {
 }
 
 fn inner_product(x1: Vec<f32>, x2: Vec<f32>) -> f32 {
-    assert_eq!(x1.len(), x2.len());
+    // assert_eq!(x1.len(), x2.len()); TDO is this needed
     x1.iter().zip(x2.iter()).map(|(x1, x2)| x1 * x2).sum()
 }
-
 
 #[derive(Debug)]
 pub struct LinearRegression {
     pub slope: f32,
     pub y_offset: f32,
 }
-
 
 pub fn lin_reg(xs: &[f32], ys: &[f32]) -> LinearRegression {
     let mean_x = xs.iter().sum::<f32>() / xs.len() as f32;

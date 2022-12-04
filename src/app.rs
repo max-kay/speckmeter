@@ -1,12 +1,9 @@
-use egui::{emath, Color32, ColorImage, Frame, Mesh, Pos2, Rect, TextureHandle, Ui, Vec2};
-use image::{buffer::ConvertBuffer, RgbaImage};
-use log::{error, warn};
-
-use v4l::io::traits::CaptureStream;
+use egui::{emath, Color32, Frame, Mesh, Pos2, Rect, TextureHandle, Ui, Vec2};
+use log::{warn, error};
 
 use crate::{
     calibration_module,
-    camera_module::{make_img_buf, my_image::Image, CameraModule, CAMERA_STREAM},
+    camera_module::{Image, CameraModule, CameraStream},
     graph_view::Meter,
 };
 
@@ -164,11 +161,7 @@ impl SpeckApp {
     }
 
     fn graph_view(&mut self, ui: &mut Ui) {
-        if CAMERA_STREAM.lock().unwrap().is_none() {
-            if let Err(err) = self.camera_module.make_stream() {
-                error!("failed to open camera stream graph view: {}", err)
-            }
-        }
+        self.camera_module.make_stream();
         self.meter.main(
             ui,
             self.camera_module.width(),
@@ -178,7 +171,7 @@ impl SpeckApp {
     }
 
     fn calibration_view(&mut self, ui: &mut Ui) {
-        *CAMERA_STREAM.lock().unwrap() = None;
+        CameraStream::close();
         match self.calibration_img.as_mut() {
             None => {
                 ui.horizontal_centered(|ui| {
@@ -209,12 +202,16 @@ impl SpeckApp {
     }
 
     fn camera_view(&mut self, ui: &mut Ui) {
-        if CAMERA_STREAM.lock().unwrap().is_some() {
+        if CameraStream::is_open() {
             ui.vertical_centered(|ui| {
                 if ui.button("take calibration image").clicked() {
                     self.new_calibration_img();
                 }
-                if let Some(texture) = self.get_current_texture(ui) {
+                if let Some(texture) = CameraStream::get_img_as_texture(
+                    ui.ctx(),
+                    self.camera_module.width(),
+                    self.camera_module.height(),
+                ) {
                     egui::Frame::canvas(ui.style()).show(ui, |ui| {
                         draw_texture(&texture, ui);
                     });
@@ -222,9 +219,7 @@ impl SpeckApp {
                 }
             });
         } else if self.camera_module.has_camera() {
-            if let Err(err) = self.camera_module.make_stream() {
-                ui.label(format!("{}", err));
-            }
+            self.camera_module.make_stream()
         } else {
             ui.label("no active camera");
         }
@@ -237,69 +232,16 @@ impl SpeckApp {
     }
 
     fn new_calibration_img(&mut self) {
-        if CAMERA_STREAM.lock().unwrap().as_ref().is_none() {
-            match self.camera_module.make_stream() {
-                Ok(_) => (),
-                Err(err) => {
-                    error!("could not make camera stream: {}", err);
-                    return;
-                }
-            }
-        }
-        match CAMERA_STREAM.lock().unwrap().as_mut().unwrap().next() {
-            Ok((buf, meta)) => {
-                match make_img_buf(buf, self.camera_module.width(), self.camera_module.height()) {
-                    Some(img) => {
-                        self.calibration_img = Some(img.into());
-                        self.main_state = MainState::Calibration;
-                        self.show_calibration = true;
-                        self.show_camera_opts = false;
-                        self.show_meter_opts = false;
-                    }
-                    None => error!(
-                        "could not load image frame: {}, {} bytes received",
-                        meta.sequence, meta.bytesused
-                    ),
-                }
-            }
-            Err(err) => error!("could not get frame: {}", err),
-        }
-    }
-}
-
-impl SpeckApp {
-    fn get_current_texture(&mut self, ui: &mut Ui) -> Option<egui::TextureHandle> {
-        match CAMERA_STREAM.lock().unwrap().as_mut()?.next() {
-            Ok((buf, meta)) => {
-                match make_img_buf(buf, self.camera_module.width(), self.camera_module.height()) {
-                    Some(image) => {
-                        let image: RgbaImage = image.convert();
-                        let image = ColorImage::from_rgba_unmultiplied(
-                            [
-                                self.camera_module.width() as usize,
-                                self.camera_module.height() as usize,
-                            ],
-                            &image,
-                        );
-                        Some(ui.ctx().load_texture(
-                            format!("frame {}", meta.sequence),
-                            image,
-                            egui::TextureFilter::Linear,
-                        ))
-                    }
-                    None => {
-                        error!(
-                            "could not load image frame: {},   {} bytes received",
-                            meta.sequence, meta.bytesused
-                        );
-                        None
-                    }
-                }
-            }
-            Err(err) => {
-                error!("failed to read frame: {}", err);
-                None
-            }
+        self.camera_module.make_stream();
+        
+        if let Some(img) = CameraStream::get_img(self.camera_module.width(), self.camera_module.height()) {
+            self.calibration_img = Some(img);
+            self.main_state = MainState::Calibration;
+            self.show_calibration = true;
+            self.show_camera_opts = false;
+            self.show_meter_opts = false;
+        } else {
+            error!("could not take calibration image")
         }
     }
 }
