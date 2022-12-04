@@ -7,10 +7,11 @@ mod app;
 mod calib;
 mod cam;
 mod csv;
+mod log;
 mod lin_reg;
-mod meter;
-mod line_tracer;
 mod line_search;
+mod line_tracer;
+mod meter;
 pub use app::SpeckApp;
 
 pub const SMALLEST_WAVELENGTH: u16 = 380;

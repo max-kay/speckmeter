@@ -370,22 +370,24 @@ impl SpectralLines {
     }
 
     pub fn line_with_wavelength(&self, lambda: f32) -> Line {
-        let top_normed_x = self.normed_x(lambda, &self.top_param);
-        let bottom_normed_x = self.normed_x(lambda, &self.bottom_param);
+        let top_normed_x = normed_x(lambda * self.grating_const / 1_000_000.0, &self.top_param);
+        let bottom_normed_x = normed_x(
+            lambda * self.grating_const / 1_000_000.0,
+            &self.bottom_param,
+        );
         Line {
             start: (top_normed_x, self.top_line.del_y() * top_normed_x),
             end: (bottom_normed_x, self.bottom_line.del_y() * bottom_normed_x),
         }
     }
+}
 
-    fn normed_x(&self, lambda: f32, parameters: &[f32]) -> f32 {
-        let a = parameters[0];
-        let b = parameters[1];
-        let c = parameters[2];
-        let r = lambda * self.grating_const / 1_000_000.0;
-        let root = (1.0 - r * r).sqrt();
-        b * ((a * root - r) / (root + a * r)) + c
-    }
+pub fn normed_x(lambda_times_grating_const: f32, parameters: &[f32]) -> f32 {
+    let a = parameters[0];
+    let b = parameters[1];
+    let c = parameters[2];
+    let root = (1.0 - lambda_times_grating_const * lambda_times_grating_const).sqrt();
+    b * ((a * root - lambda_times_grating_const) / (root + a * lambda_times_grating_const)) + c
 }
 
 fn gen_param(xs: &[f32], ys: &[f32], rs: &[f32], init_param: Vec<f32>) -> (Line, Vec<f32>) {
@@ -402,7 +404,7 @@ fn gen_param(xs: &[f32], ys: &[f32], rs: &[f32], init_param: Vec<f32>) -> (Line,
     let problem = FittingProblem {
         data: norm_xs.zip(rs.iter().cloned()).collect_vec(),
     };
-    let param = line_search::search_minimum(problem, init_param, 4000);
+    let param = line_search::search_minimum(problem, init_param, 4000, 0.000000001);
     (line, param)
 }
 
@@ -412,13 +414,9 @@ struct FittingProblem {
 
 impl Cost for FittingProblem {
     fn cost(&self, parameters: Vec<f32>) -> f32 {
-        let a = parameters[0];
-        let b = parameters[1];
-        let c = parameters[2];
         self.data.iter().fold(0.0, |acc, (x, r)| {
-            let root = (1.0 - r * r).sqrt();
-            acc + (b * ((a * root - r) / (root + a * r)) + c - x).powi(2)
-        })
+            acc + (normed_x(*r, &parameters) - x).powi(2)
+        }) / self.data.len() as f32
     }
 }
 
@@ -426,14 +424,15 @@ impl Gradient for FittingProblem {
     fn gradient(&self, parameters: Vec<f32>) -> Vec<f32> {
         let a = parameters[0];
         let b = parameters[1];
-        let c = parameters[2];
-        self.data
+        let _c = parameters[2];
+        let grad = self
+            .data
             .iter()
             .fold([0.0, 0.0, 0.0], |acc, (x, r)| {
                 let [mut da, mut db, mut dc] = acc;
+                let prefactor = 2.0 * (normed_x(*r, &parameters) - x);
                 let root = (1.0 - r * r).sqrt();
-                let prefactor = 2.0 * (b * ((a * root - r) / (root + a * r)) + c - x);
-
+                
                 da += prefactor * b * (root * (root + a * r) - (a * root - r) * r)
                     / (root + a * r).powi(2);
 
@@ -443,6 +442,7 @@ impl Gradient for FittingProblem {
 
                 [da, db, dc]
             })
-            .into()
+            .into();
+        line_search::scale(grad, 1.0 / self.data.len() as f32)
     }
 }
