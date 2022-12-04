@@ -23,6 +23,7 @@ pub struct Calibration {
     sensor_width: f32,
     #[serde(skip)]
     show_generated: Option<u16>,
+    #[serde(skip)]
     spectral: Option<SpectralLines>,
 }
 
@@ -165,9 +166,13 @@ impl Calibration {
                         TEXT_COLOR,
                     );
                 }
-
-                
-                // return;
+                ui.painter()
+                    .line_segment(spectral.top_line.to_points(to_screen), ACTIVE_LINE_STROKE);
+                ui.painter().line_segment(
+                    spectral.bottom_line.to_points(to_screen),
+                    ACTIVE_LINE_STROKE,
+                );
+                // return; // TODO
             }
         }
         // paint lines drawn by the user and its corresponding wavelength
@@ -288,7 +293,7 @@ impl Calibration {
 
         ui.strong("Spectrometer settings");
         ui.label("Angle in degrees");
-        ui.add(Slider::new(&mut self.angle, 0.0..=90.0));
+        ui.add(Slider::new(&mut self.angle, -90.0..=90.0));
         ui.label("Distance to sensor in mm");
         ui.add(Slider::new(&mut self.distance_to_sensor, 0.0..=100.0));
         ui.label("Sensor width in mm");
@@ -321,8 +326,9 @@ impl Line {
         }
     }
 
-    pub fn del_y(&self) -> f32 {
-        self.end.1 - self.start.0
+    // returns the point at frac of the whole line for a line from x=(0,1)
+    pub fn normed_x_fraction(&self, frac: f32) -> (f32, f32) {
+        (frac, ((self.end.1 - self.start.1) * frac + self.start.1))
     }
 }
 
@@ -359,8 +365,8 @@ impl SpectralLines {
         let x1s = measure.iter().map(|(_, line)| line.end.0).collect_vec();
         let y1s = measure.iter().map(|(_, line)| line.end.1).collect_vec();
 
-        let (top_line, top_param) = dbg!(gen_param(&x0s, &y0s, &rs, init_params.clone()));
-        let (bottom_line, bottom_param) = dbg!(gen_param(&x1s, &y1s, &rs, init_params));
+        let (top_line, top_param) = gen_param(&x0s, &y0s, &rs, init_params.clone());
+        let (bottom_line, bottom_param) = gen_param(&x1s, &y1s, &rs, init_params);
 
         Some(Self {
             top_line,
@@ -378,8 +384,8 @@ impl SpectralLines {
             &self.bottom_param,
         );
         Line {
-            start: (top_normed_x, self.top_line.del_y() * top_normed_x),
-            end: (bottom_normed_x, self.bottom_line.del_y() * bottom_normed_x),
+            start: self.top_line.normed_x_fraction(top_normed_x),
+            end: self.bottom_line.normed_x_fraction(bottom_normed_x),
         }
     }
 }
@@ -406,7 +412,7 @@ fn gen_param(xs: &[f32], ys: &[f32], rs: &[f32], init_param: Vec<f32>) -> (Line,
     let problem = FittingProblem {
         data: norm_xs.zip(rs.iter().cloned()).collect_vec(),
     };
-    let param = line_search::search_minimum(problem, init_param, 4000, 0.000000001);
+    let param = line_search::search_minimum(problem, init_param, 4000, 0.1);
     (line, param)
 }
 

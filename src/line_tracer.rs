@@ -19,8 +19,21 @@ impl LineTracer {
         if ui.button("add new wavelength").clicked() {
             self.lines_to_trace.push(500.0)
         }
+
+        if ui.button("Take reference").clicked() {
+            self.take_reference()
+        }
     }
 }
+
+impl LineTracer {
+    pub fn take_reference(&mut self)  {
+        todo!()
+    }
+}
+
+
+
 
 impl Default for LineTracer {
     fn default() -> Self {
