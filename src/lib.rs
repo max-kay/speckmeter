@@ -4,14 +4,13 @@
 #![feature(const_fn_floating_point_arithmetic)]
 
 mod app;
-mod calib;
-mod cam;
+mod calibration_module;
+mod camera_module;
 mod csv;
-mod log;
-mod lin_reg;
-mod line_search;
+mod fitting;
+mod graph_view;
 mod line_tracer;
-mod meter;
+mod log;
 pub use app::SpeckApp;
 
 pub const SMALLEST_WAVELENGTH: u16 = 380;

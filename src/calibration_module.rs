@@ -5,8 +5,7 @@ use log::{error, warn};
 use std::{f32::consts::PI, mem::swap};
 
 use crate::{
-    lin_reg,
-    line_search::{self, Cost, Gradient},
+    fitting::{self, Cost, Gradient},
     LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
 
@@ -399,7 +398,7 @@ pub fn normed_x(lambda_times_grating_const: f32, parameters: &[f32]) -> f32 {
 }
 
 fn gen_param(xs: &[f32], ys: &[f32], rs: &[f32], init_param: Vec<f32>) -> (Line, Vec<f32>) {
-    let lin_reg::Regression { slope, y_offset } = lin_reg::lin_reg(xs, ys);
+    let fitting::LinearRegression{ slope, y_offset } = fitting::lin_reg(xs, ys);
     let line = Line {
         start: (0.0, y_offset),
         end: (1.0, y_offset + slope),
@@ -412,7 +411,7 @@ fn gen_param(xs: &[f32], ys: &[f32], rs: &[f32], init_param: Vec<f32>) -> (Line,
     let problem = FittingProblem {
         data: norm_xs.zip(rs.iter().cloned()).collect_vec(),
     };
-    let param = line_search::search_minimum(problem, init_param, 4000, 0.1);
+    let param = fitting::search_minimum(problem, init_param, 4000, 0.1);
     (line, param)
 }
 
@@ -451,6 +450,6 @@ impl Gradient for FittingProblem {
                 [da, db, dc]
             })
             .into();
-        line_search::scale(grad, 1.0 / self.data.len() as f32)
+        fitting::scale(grad, 1.0 / self.data.len() as f32)
     }
 }

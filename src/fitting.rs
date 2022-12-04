@@ -39,7 +39,6 @@ where
             );
         }
 
-
         let t = -c * inner_product(gradient.clone(), gradient.clone());
         let mut current_alpha = last_step_size;
         let step_size = loop {
@@ -72,4 +71,26 @@ pub fn scale(x: Vec<f32>, factor: f32) -> Vec<f32> {
 fn inner_product(x1: Vec<f32>, x2: Vec<f32>) -> f32 {
     assert_eq!(x1.len(), x2.len());
     x1.iter().zip(x2.iter()).map(|(x1, x2)| x1 * x2).sum()
+}
+
+
+#[derive(Debug)]
+pub struct LinearRegression {
+    pub slope: f32,
+    pub y_offset: f32,
+}
+
+
+pub fn lin_reg(xs: &[f32], ys: &[f32]) -> LinearRegression {
+    let mean_x = xs.iter().sum::<f32>() / xs.len() as f32;
+    let mean_y = ys.iter().sum::<f32>() / ys.len() as f32;
+
+    let dev_xs = xs.iter().map(|x| x - mean_x);
+    let dev_ys = ys.iter().map(|y| y - mean_y);
+
+    let x_squared = dev_xs.clone().fold(0.0, |acc, x| acc + x * x);
+
+    let slope = dev_ys.zip(dev_xs).fold(0.0, |acc, (y, x)| acc + x * y) / x_squared;
+    let y_offset = mean_y - slope * mean_x;
+    LinearRegression { slope, y_offset }
 }

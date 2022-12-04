@@ -11,8 +11,8 @@ use native_dialog::FileDialog;
 use v4l::io::traits::CaptureStream;
 
 use crate::{
-    app::{make_img_buf, Image, CAMERA_STREAM},
-    calib::Calibration,
+    calibration_module::Calibration,
+    camera_module::{make_img_buf, my_image::Image, CAMERA_STREAM},
     csv, LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
 
@@ -195,7 +195,7 @@ impl Meter {
         current_height: u32,
         calib: &mut Calibration,
     ) {
-        match CAMERA_STREAM.lock().as_mut() {
+        match CAMERA_STREAM.lock().unwrap().as_mut() {
             Some(stream) => match stream.next() {
                 Ok((buf, _)) => {
                     let img: Image = make_img_buf(buf, current_width, current_height)

@@ -27,13 +27,10 @@ impl LineTracer {
 }
 
 impl LineTracer {
-    pub fn take_reference(&mut self)  {
+    pub fn take_reference(&mut self) {
         todo!()
     }
 }
-
-
-
 
 impl Default for LineTracer {
     fn default() -> Self {

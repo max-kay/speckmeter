@@ -1,78 +1,14 @@
-use egui::{
-    emath, mutex::Mutex, Color32, ColorImage, Frame, Mesh, Pos2, Rect, TextureHandle, Ui, Vec2,
-};
-use image::{buffer::ConvertBuffer, ImageBuffer, Rgb, RgbaImage};
+use egui::{emath, Color32, ColorImage, Frame, Mesh, Pos2, Rect, TextureHandle, Ui, Vec2};
+use image::{buffer::ConvertBuffer, RgbaImage};
 use log::{error, warn};
-use once_cell::sync::Lazy;
-use v4l::{io::traits::CaptureStream, prelude::*};
 
-use crate::{calib, cam::CameraModule, meter::Meter};
+use v4l::io::traits::CaptureStream;
 
-pub static CAMERA_STREAM: Lazy<Mutex<Option<MmapStream>>> = Lazy::new(Default::default);
-
-pub fn make_img_buf(buf: &[u8], width: u32, height: u32) -> Option<ImageBuffer<Rgb<u8>, &[u8]>> {
-    let image = ImageBuffer::from_raw(width, height, buf)?;
-    Some(image as ImageBuffer<Rgb<u8>, &[u8]>)
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct Image {
-    pub width: usize,
-    pub height: usize,
-    data: Vec<u8>,
-    #[serde(skip)]
-    texture: Option<TextureHandle>,
-}
-
-impl Image {
-    fn get_texture(&mut self, ui: &mut Ui) -> &egui::TextureHandle {
-        if self.texture.is_some() {
-            return self.texture.as_ref().unwrap();
-        }
-        let buf: RgbaImage = ImageBuffer::<Rgb<u8>, &[u8]>::from_raw(
-            self.width as u32,
-            self.height as u32,
-            &self.data,
-        )
-        .expect("building buffer failed")
-        .convert();
-        let image = ColorImage::from_rgba_unmultiplied([self.width, self.height], &buf);
-        self.texture = Some(ui.ctx().load_texture(
-            "calibration img",
-            image,
-            egui::TextureFilter::Linear,
-        ));
-        self.texture.as_ref().unwrap()
-    }
-
-    pub fn get(&self, x: usize, y: usize) -> Option<(u8, u8, u8)> {
-        if self.width < x {
-            // TODO check this logic
-            return None;
-        }
-        let index = 3 * (y * self.width + x);
-        Some((
-            *self.data.get(index)?,
-            *self.data.get(index + 1)?,
-            *self.data.get(index + 2)?,
-        ))
-    }
-
-    pub fn aspect_ratio(&self) -> f32 {
-        self.width as f32 / self.height as f32
-    }
-}
-
-impl From<ImageBuffer<Rgb<u8>, &[u8]>> for Image {
-    fn from(value: ImageBuffer<Rgb<u8>, &[u8]>) -> Self {
-        Self {
-            width: value.width() as usize,
-            height: value.height() as usize,
-            data: value.to_vec(),
-            texture: None,
-        }
-    }
-}
+use crate::{
+    calibration_module,
+    camera_module::{make_img_buf, my_image::Image, CameraModule, CAMERA_STREAM},
+    graph_view::Meter,
+};
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)]
@@ -81,7 +17,7 @@ pub struct SpeckApp {
     camera_module: CameraModule,
     #[serde(skip)]
     calibration_img: Option<Image>,
-    calibration: calib::Calibration,
+    calibration: calibration_module::Calibration,
     #[serde(skip)]
     meter: Meter,
     main_state: MainState,
@@ -96,7 +32,7 @@ impl Default for SpeckApp {
         Self {
             camera_module: Default::default(),
             calibration_img: None,
-            calibration: calib::Calibration::new(),
+            calibration: calibration_module::Calibration::new(),
             main_state: Default::default(),
             meter: Default::default(),
             show_camera_opts: true,
@@ -179,108 +115,118 @@ impl SpeckApp {
                     ui.checkbox(&mut self.show_meter_opts, "Meter Options")
                 });
                 ui.horizontal_centered(|ui| {
-                    if ui
-                        .selectable_value(&mut self.main_state, MainState::CameraView, "📷 Camera")
-                        .clicked()
-                    {
-                        self.close_side_panels();
-                        self.show_camera_opts = true;
-                    };
-                    if ui
-                        .selectable_value(
-                            &mut self.main_state,
-                            MainState::Calibration,
-                            "⭕ Calibration",
-                        )
-                        .clicked()
-                    {
-                        self.close_side_panels();
-                        self.show_calibration = true;
-                    };
-                    if ui
-                        .selectable_value(
-                            &mut self.main_state,
-                            MainState::GraphView,
-                            "Spectrograph",
-                        )
-                        .clicked()
-                    {
-                        self.close_side_panels();
-                        self.show_meter_opts = true;
-                    }
+                    self.side_panel_menu(ui);
                 })
             })
         });
     }
 
+    fn side_panel_menu(&mut self, ui: &mut Ui) {
+        if ui
+            .selectable_value(&mut self.main_state, MainState::CameraView, "📷 Camera")
+            .clicked()
+        {
+            self.close_side_panels();
+            self.show_camera_opts = true;
+        };
+        if ui
+            .selectable_value(
+                &mut self.main_state,
+                MainState::Calibration,
+                "⭕ Calibration",
+            )
+            .clicked()
+        {
+            self.close_side_panels();
+            self.show_calibration = true;
+        };
+        if ui
+            .selectable_value(&mut self.main_state, MainState::GraphView, "Spectrograph")
+            .clicked()
+        {
+            self.close_side_panels();
+            self.show_meter_opts = true;
+        }
+    }
+
     fn main_view(&mut self, ui: &mut Ui) {
         match self.main_state {
             MainState::CameraView => {
-                let stream_on = CAMERA_STREAM.lock().is_some();
-                if stream_on {
-                    ui.vertical_centered(|ui| {
-                        if ui.button("take calibration image").clicked() {
-                            self.new_calibration_img();
-                        }
-                        if let Some(texture) = self.get_current_texture(ui) {
-                            egui::Frame::canvas(ui.style()).show(ui, |ui| {
-                                draw_texture(&texture, ui);
-                            });
-                            ui.ctx().request_repaint()
-                        }
-                    });
-                } else if self.camera_module.has_camera() {
-                    if let Err(err) = self.camera_module.make_stream() {
-                        ui.label(format!("{}", err));
-                    }
-                } else {
-                    ui.label("no active camera");
-                }
+                self.camera_view(ui);
             }
             MainState::Calibration => {
-                *CAMERA_STREAM.lock() = None;
-                match self.calibration_img.as_mut() {
-                    None => {
-                        ui.horizontal_centered(|ui| {
-                            ui.strong("there is no calibration image");
-                            if ui.button("go to camera").clicked() {
-                                self.close_side_panels();
-                                self.show_camera_opts = true;
-                                self.main_state = MainState::CameraView;
-                            }
-                            if ui.button("take calibration image").clicked() {
-                                self.new_calibration_img()
-                            }
-                        });
-                    }
-                    Some(img) => {
-                        let aspect_ratio = img.aspect_ratio();
-                        let texture = img.get_texture(ui);
-                        ui.vertical_centered(|ui| {
-                            let style = ui.style();
-                            Frame::canvas(style).show(ui, |ui| {
-                                let (to_screen, response) = draw_texture(texture, ui);
-                                self.calibration
-                                    .main_view(ui, to_screen, aspect_ratio, response);
-                            });
-                        });
-                    }
-                }
+                self.calibration_view(ui);
             }
             MainState::GraphView => {
-                if CAMERA_STREAM.lock().is_none() {
-                    if let Err(err) = self.camera_module.make_stream() {
-                        error!("failed to open camera stream graph view: {}", err)
-                    }
-                }
-
-                self.meter.main(
-                    ui,
-                    self.camera_module.width(),
-                    self.camera_module.height(),
-                    &mut self.calibration,
-                )
+                self.graph_view(ui);
             }
+        }
+    }
+
+    fn graph_view(&mut self, ui: &mut Ui) {
+        if CAMERA_STREAM.lock().unwrap().is_none() {
+            if let Err(err) = self.camera_module.make_stream() {
+                error!("failed to open camera stream graph view: {}", err)
+            }
+        }
+        self.meter.main(
+            ui,
+            self.camera_module.width(),
+            self.camera_module.height(),
+            &mut self.calibration,
+        )
+    }
+
+    fn calibration_view(&mut self, ui: &mut Ui) {
+        *CAMERA_STREAM.lock().unwrap() = None;
+        match self.calibration_img.as_mut() {
+            None => {
+                ui.horizontal_centered(|ui| {
+                    ui.strong("there is no calibration image");
+                    if ui.button("go to camera").clicked() {
+                        self.close_side_panels();
+                        self.show_camera_opts = true;
+                        self.main_state = MainState::CameraView;
+                    }
+                    if ui.button("take calibration image").clicked() {
+                        self.new_calibration_img()
+                    }
+                });
+            }
+            Some(img) => {
+                let aspect_ratio = img.aspect_ratio();
+                let texture = img.get_texture(ui);
+                ui.vertical_centered(|ui| {
+                    let style = ui.style();
+                    Frame::canvas(style).show(ui, |ui| {
+                        let (to_screen, response) = draw_texture(texture, ui);
+                        self.calibration
+                            .main_view(ui, to_screen, aspect_ratio, response);
+                    });
+                });
+            }
+        }
+    }
+
+    fn camera_view(&mut self, ui: &mut Ui) {
+        if CAMERA_STREAM.lock().unwrap().is_some() {
+            ui.vertical_centered(|ui| {
+                if ui.button("take calibration image").clicked() {
+                    self.new_calibration_img();
+                }
+                if let Some(texture) = self.get_current_texture(ui) {
+                    egui::Frame::canvas(ui.style()).show(ui, |ui| {
+                        draw_texture(&texture, ui);
+                    });
+                    ui.ctx().request_repaint()
+                }
+            });
+        } else if self.camera_module.has_camera() {
+            if let Err(err) = self.camera_module.make_stream() {
+                ui.label(format!("{}", err));
+            }
+        } else {
+            ui.label("no active camera");
         }
     }
 
@@ -291,7 +237,7 @@ impl SpeckApp {
     }
 
     fn new_calibration_img(&mut self) {
-        if CAMERA_STREAM.lock().as_ref().is_none() {
+        if CAMERA_STREAM.lock().unwrap().as_ref().is_none() {
             match self.camera_module.make_stream() {
                 Ok(_) => (),
                 Err(err) => {
@@ -300,7 +246,7 @@ impl SpeckApp {
                 }
             }
         }
-        match CAMERA_STREAM.lock().as_mut().unwrap().next() {
+        match CAMERA_STREAM.lock().unwrap().as_mut().unwrap().next() {
             Ok((buf, meta)) => {
                 match make_img_buf(buf, self.camera_module.width(), self.camera_module.height()) {
                     Some(img) => {
@@ -323,7 +269,7 @@ impl SpeckApp {
 
 impl SpeckApp {
     fn get_current_texture(&mut self, ui: &mut Ui) -> Option<egui::TextureHandle> {
-        match CAMERA_STREAM.lock().as_mut()?.next() {
+        match CAMERA_STREAM.lock().unwrap().as_mut()?.next() {
             Ok((buf, meta)) => {
                 match make_img_buf(buf, self.camera_module.width(), self.camera_module.height()) {
                     Some(image) => {

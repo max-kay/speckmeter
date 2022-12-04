@@ -1,8 +1,9 @@
-use crate::app::CAMERA_STREAM;
 use core::panic;
 use egui::{Slider, Ui};
+use image::{ImageBuffer, Rgb};
 use log::{error, warn};
-use std::{io::Result, vec::Vec};
+use once_cell::sync::Lazy;
+use std::{io::Result, sync::Mutex, vec::Vec};
 use v4l::{
     buffer,
     context::Node,
@@ -13,6 +14,37 @@ use v4l::{
     video::{capture::Parameters, Capture},
     Control, Format, FourCC, Fraction,
 };
+
+pub mod my_image;
+
+pub static CAMERA_STREAM: Lazy<Mutex<Option<MmapStream>>> = Lazy::new(Default::default);
+
+pub fn make_img_buf(buf: &[u8], width: u32, height: u32) -> Option<ImageBuffer<Rgb<u8>, &[u8]>> {
+    let image = ImageBuffer::from_raw(width, height, buf)?;
+    Some(image as ImageBuffer<Rgb<u8>, &[u8]>)
+}
+
+pub fn fetch_controls(camera: &Device) -> Result<Vec<(control::Description, Control)>> {
+    let ctrl_description = camera.query_controls()?;
+    let mut controls = Vec::new();
+    for d in ctrl_description {
+        match camera.control(d.id) {
+            Ok(control) => controls.push((d, control)),
+            Err(err) => warn!(
+                "failed to load value for {} disregarding it. Err:{}",
+                d.name, err
+            ),
+        }
+    }
+    Ok(controls)
+}
+
+pub fn set_control(cam: &Device, ctrl: Control) -> Result<()> {
+    *CAMERA_STREAM.lock().unwrap() = None;
+    cam.set_control(ctrl)
+}
+
+
 
 struct CamInner {
     camera: Device,
@@ -57,7 +89,7 @@ impl CamInner {
     }
 
     pub fn make_stream(&mut self) -> Result<()> {
-        *CAMERA_STREAM.lock() = Some(MmapStream::with_buffers(
+        *CAMERA_STREAM.lock().unwrap() = Some(MmapStream::with_buffers(
             &self.camera,
             buffer::Type::VideoCapture,
             5,
@@ -66,24 +98,8 @@ impl CamInner {
     }
 }
 
-fn fetch_controls(camera: &Device) -> Result<Vec<(control::Description, Control)>> {
-    let ctrl_description = camera.query_controls()?;
-    let mut controls = Vec::new();
-    for d in ctrl_description {
-        match camera.control(d.id) {
-            Ok(control) => controls.push((d, control)),
-            Err(err) => warn!(
-                "failed to load value for {} disregarding it. Err:{}",
-                d.name, err
-            ),
-        }
-    }
-    Ok(controls)
-}
-
 impl CamInner {
     fn update(&mut self, ui: &mut Ui) {
-        // ui.heading(self.camera.info().human_name());
         ui.label(format!(
             "{}x{}\n{} - {}",
             self.width,
@@ -106,7 +122,7 @@ impl CamInner {
                             )
                             .clicked()
                         {
-                            *CAMERA_STREAM.lock() = None;
+                            *CAMERA_STREAM.lock().unwrap() = None;
                             match self.camera.set_format(&Format::new(
                                 self.width,
                                 self.height,
@@ -140,7 +156,7 @@ impl CamInner {
                                 )
                                 .clicked()
                             {
-                                *CAMERA_STREAM.lock() = None;
+                                *CAMERA_STREAM.lock().unwrap() = None;
                                 match self.camera.set_format(&Format::new(
                                     width,
                                     height,
@@ -180,7 +196,7 @@ impl CamInner {
                                     )
                                     .clicked()
                                 {
-                                    *CAMERA_STREAM.lock() = None;
+                                    *CAMERA_STREAM.lock().unwrap() = None;
                                     match self.camera.set_params(&Parameters::new(interval)) {
                                         Ok(para) => {
                                             self.interval = para.interval;
@@ -303,11 +319,6 @@ fn update_ctrl(
     }
 }
 
-fn set_control(cam: &Device, ctrl: Control) -> Result<()> {
-    *CAMERA_STREAM.lock() = None;
-    cam.set_control(ctrl)
-}
-
 // fn flag_ui(flags: &mut control::Flags, modify: control::Flags, ui: &mut Ui) -> bool {
 //     if ui.checkbox(&mut flags.contains(modify), format!("{}", modify)).clicked() {
 //         flags.toggle(modify);
@@ -346,7 +357,7 @@ impl CameraModule {
     pub fn reset(&mut self) {
         self.nodes = Vec::new();
         self.inner = None;
-        *CAMERA_STREAM.lock() = None;
+        *CAMERA_STREAM.lock().unwrap() = None;
     }
 
     pub fn has_camera(&self) -> bool {
