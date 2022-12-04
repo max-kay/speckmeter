@@ -89,7 +89,7 @@ impl Calibration {
     fn generate_regression(&mut self) -> Option<()> {
         if self.validate() && self.lines.len() > 1 {
             self.spectral = SpectralLines::new(
-                self.lines.clone(),
+                dbg!(self.lines.clone()),
                 self.grating_const,
                 self.angle,
                 self.distance_to_sensor,
@@ -142,8 +142,8 @@ impl Calibration {
             };
         // this allows me to work in normalised coordiantes, [0, 1]x[0, 1]
         let to_screen = emath::RectTransform::from_to(
-            Rect::from_min_max(top_left_screen, bottom_right_screen),
             Rect::from_x_y_ranges(0.0..=1.0, 0.0..=1.0),
+            Rect::from_min_max(top_left_screen, bottom_right_screen),
         );
         let to_picture = to_screen.inverse();
         // Show generated lines if they exist and line_count is set and then skip the rest of this fn
@@ -165,7 +165,9 @@ impl Calibration {
                         TEXT_COLOR,
                     );
                 }
-                return;
+
+                
+                // return;
             }
         }
         // paint lines drawn by the user and its corresponding wavelength
@@ -341,8 +343,8 @@ impl SpectralLines {
         dist: f32,
         sensor_width: f32,
     ) -> Option<Self> {
-        let a = dbg!((angle * PI / 360.0).tan());
-        let b = dbg!(dist / sensor_width);
+        let a = (angle * PI / 360.0).tan();
+        let b = dist / sensor_width;
         let c = 0.5;
 
         let init_params = vec![a, b, c];
@@ -357,8 +359,8 @@ impl SpectralLines {
         let x1s = measure.iter().map(|(_, line)| line.end.0).collect_vec();
         let y1s = measure.iter().map(|(_, line)| line.end.1).collect_vec();
 
-        let (top_line, top_param) = gen_param(&x0s, &y0s, &rs, init_params.clone());
-        let (bottom_line, bottom_param) = gen_param(&x1s, &y1s, &rs, init_params);
+        let (top_line, top_param) = dbg!(gen_param(&x0s, &y0s, &rs, init_params.clone()));
+        let (bottom_line, bottom_param) = dbg!(gen_param(&x1s, &y1s, &rs, init_params));
 
         Some(Self {
             top_line,
@@ -432,7 +434,7 @@ impl Gradient for FittingProblem {
                 let [mut da, mut db, mut dc] = acc;
                 let prefactor = 2.0 * (normed_x(*r, &parameters) - x);
                 let root = (1.0 - r * r).sqrt();
-                
+
                 da += prefactor * b * (root * (root + a * r) - (a * root - r) * r)
                     / (root + a * r).powi(2);
 

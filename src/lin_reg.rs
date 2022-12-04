@@ -12,6 +12,7 @@ pub fn lin_reg(xs: &[f32], ys: &[f32]) -> Regression {
     Regression { slope, y_offset }
 }
 
+#[derive(Debug)]
 pub struct Regression {
     pub slope: f32,
     pub y_offset: f32,
