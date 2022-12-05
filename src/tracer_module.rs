@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use egui::{
     plot::{Bar, BarChart, Plot},
-    DragValue, Response, Ui,
+    Context, DragValue, Response, Ui,
 };
 use log::warn;
 
@@ -22,7 +22,29 @@ pub struct TracerModule {
 }
 
 impl TracerModule {
-    pub fn main(&mut self, ui: &mut Ui, calib: &mut CalibrationModule, width: u32, height: u32) {
+    pub fn display(
+        &mut self,
+        ctx: &Context,
+        calib: &mut CalibrationModule,
+        width: u32,
+        height: u32,
+    ) {
+        egui::SidePanel::right("tracer_opts").show(ctx, |ui| self.side_panel(ui));
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.main_view(ui, calib, width, height);
+        });
+    }
+}
+
+impl TracerModule {
+    pub fn main_view(
+        &mut self,
+        ui: &mut Ui,
+        calib: &mut CalibrationModule,
+        width: u32,
+        height: u32,
+    ) {
         if let Some(img) = CameraStream::get_img(width, height) {
             // update according to flags
             if self.record {
@@ -34,6 +56,13 @@ impl TracerModule {
             for tracer in &mut self.tracers {
                 tracer.update(&img, calib, self.record);
             }
+            if self.add_new_next {
+                match PeakTrace::new(500.0, &img, calib) {
+                    Some(tracer) => self.tracers.push(tracer),
+                    None => warn!("could not add new tracer"),
+                }
+                self.add_new_next = false
+            }
             if self.reconfigure_next {
                 self.tracers
                     .sort_by(|a, b| a.wavelength.partial_cmp(&b.wavelength).unwrap());
@@ -43,13 +72,6 @@ impl TracerModule {
                     self.take_reference()
                 }
                 self.reconfigure_next = false
-            }
-            if self.add_new_next {
-                match PeakTrace::new(500.0, &img, calib) {
-                    Some(tracer) => self.tracers.push(tracer),
-                    None => warn!("could not add new tracer"),
-                }
-                self.add_new_next = false
             }
 
             //
@@ -75,7 +97,7 @@ impl TracerModule {
     pub fn side_panel(&mut self, ui: &mut Ui) {
         ui.label("trace wavelengths");
         for tracer in &mut self.tracers {
-            self.reconfigure_next |= tracer.ui(ui).changed();
+            self.reconfigure_next |= tracer.ui(ui).drag_released();
         }
         if ui.button("add new wavelength").clicked() {
             self.add_new_next = true;
@@ -154,7 +176,11 @@ impl PeakTrace {
     }
 
     fn ui(&mut self, ui: &mut Ui) -> Response {
-        ui.add(DragValue::new(&mut self.wavelength).prefix("λ: "))
+        ui.add(
+            DragValue::new(&mut self.wavelength)
+                .clamp_range(SMALLEST_WAVELENGTH as f32..=LARGEST_WAVELENGTH as f32)
+                .prefix("λ: "),
+        )
     }
 
     fn abs_and_ref(&self) -> (&[f32], f32) {

@@ -1,10 +1,12 @@
 use eframe::emath::RectTransform;
-use egui::{self, emath, Align2, Color32, Pos2, Rect, Response, Slider, Ui};
+use egui::{self, emath, Align2, Color32, Context, Frame, Pos2, Rect, Response, Slider, Ui};
 use itertools::Itertools;
 use log::{error, warn};
 use std::{f32::consts::PI, mem::swap};
 
 use crate::{
+    app::{draw_texture, MainState},
+    camera_module::{CameraStream, Image},
     fitting::{self, Cost, Gradient},
     LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
@@ -15,7 +17,6 @@ pub struct CalibrationModule {
     start: Option<(f32, f32)>,
     current_line: Option<Line>,
     current_text: String,
-    horizontal_lines: bool,
     grating_const: f32,
     angle: f32,
     distance_to_sensor: f32,
@@ -27,13 +28,55 @@ pub struct CalibrationModule {
 }
 
 impl CalibrationModule {
+    pub fn display(
+        &mut self,
+        ctx: &Context,
+        main_state: &mut MainState,
+        calibration_image: &mut Option<Image>,
+        width: u32,
+        height: u32,
+    ) {
+        egui::SidePanel::right("spectrograph_opts").show(ctx, |ui| self.side_panel(ui));
+        egui::CentralPanel::default().show(ctx, |ui| match calibration_image.as_mut() {
+            None => {
+                ui.vertical_centered(|ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.strong("there is no calibration image");
+                        if ui.button("go to camera").clicked() {
+                            *main_state = MainState::CameraView;
+                        }
+                        if ui.button("take calibration image").clicked() {
+                            if let Some(img) = CameraStream::get_img(width, height) {
+                                *calibration_image = Some(img);
+                            } else {
+                                error!("could not take calibration image")
+                            }
+                        }
+                    })
+                });
+            }
+            Some(img) => {
+                let aspect_ratio = img.aspect_ratio();
+                let texture = img.get_texture(ui);
+                ui.vertical_centered(|ui| {
+                    let style = ui.style();
+                    Frame::canvas(style).show(ui, |ui| {
+                        let (to_screen, response) = draw_texture(texture, ui);
+                        self.main_view(ui, to_screen, aspect_ratio, response);
+                    });
+                });
+            }
+        });
+    }
+}
+
+impl CalibrationModule {
     pub fn new() -> Self {
         Self {
             lines: Vec::new(),
             start: None,
             current_line: None,
             current_text: String::new(),
-            horizontal_lines: false,
             grating_const: 500.0,
             show_generated: None,
             spectral: None,
@@ -69,21 +112,12 @@ impl CalibrationModule {
     }
 
     fn validate(&mut self) -> bool {
-        if self.horizontal_lines {
-            self.lines
-                .iter_mut()
-                .for_each(|(_, line)| line.make_left_to_right());
-            self.lines.sort_by_key(|(wavelength, _)| *wavelength);
-            self.lines.is_sorted_by_key(|(_, line)| line.start.1)
-                && self.lines.is_sorted_by_key(|(_, line)| line.end.1)
-        } else {
-            self.lines
-                .iter_mut()
-                .for_each(|(_, line)| line.make_top_to_bottom());
-            self.lines.sort_by_key(|(wavelength, _)| *wavelength);
-            self.lines.is_sorted_by_key(|(_, line)| line.start.0)
-                && self.lines.is_sorted_by_key(|(_, line)| line.end.0)
-        }
+        self.lines
+            .iter_mut()
+            .for_each(|(_, line)| line.make_top_to_bottom());
+        self.lines.sort_by_key(|(wavelength, _)| *wavelength);
+        self.lines.is_sorted_by_key(|(_, line)| line.start.0)
+            && self.lines.is_sorted_by_key(|(_, line)| line.end.0)
     }
 
     fn generate_regression(&mut self) -> Option<()> {
@@ -124,7 +158,12 @@ impl CalibrationModule {
         if self.spectral.is_none() {
             self.generate_regression()?
         }
-        Some(self.spectral.as_ref().unwrap().line_with_wavelength(wavelength))
+        Some(
+            self.spectral
+                .as_ref()
+                .unwrap()
+                .line_with_wavelength(wavelength),
+        )
     }
 }
 
@@ -259,15 +298,6 @@ impl CalibrationModule {
     }
 
     pub fn side_panel(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            ui.label("Lines with the same wavelength are");
-            if ui.radio(self.horizontal_lines, "horizontal").clicked() {
-                self.horizontal_lines = true;
-            }
-            if ui.radio(!self.horizontal_lines, "vertical").clicked() {
-                self.horizontal_lines = false;
-            }
-        });
         ui.label(format!("There are {} lines.", self.lines.len()));
         if self.spectral.is_some() {
             match self.show_generated.as_mut() {
@@ -318,12 +348,6 @@ pub struct Line {
 impl Line {
     pub fn to_points(self, to_screen: RectTransform) -> [Pos2; 2] {
         [to_screen * self.start.into(), to_screen * self.end.into()]
-    }
-
-    pub fn make_left_to_right(&mut self) {
-        if self.start.0 > self.end.0 {
-            swap(&mut self.start, &mut self.end)
-        }
     }
 
     pub fn make_top_to_bottom(&mut self) {

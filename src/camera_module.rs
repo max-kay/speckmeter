@@ -1,5 +1,5 @@
 use core::panic;
-use egui::{Slider, Ui};
+use egui::{Context, Slider, Ui};
 use log::{error, warn};
 use std::io::Result;
 use v4l::{
@@ -17,6 +17,142 @@ pub mod my_image;
 
 pub use camera_stream::CameraStream;
 pub use my_image::Image;
+
+use crate::app::draw_texture;
+
+pub struct CameraModule {
+    inner: Option<CamInner>,
+    nodes: Vec<Node>,
+}
+
+impl CameraModule {
+    pub fn display(&mut self, ctx: &Context, calibration_image: &mut Option<Image>) {
+        egui::SidePanel::left("spectrograph_opts").show(ctx, |ui| self.side_panel(ui));
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if CameraStream::is_open() {
+                ui.vertical_centered(|ui| {
+                    if ui.button("take calibration image").clicked() {
+                        if let Some(img) = CameraStream::get_img(self.width(), self.height()) {
+                            *calibration_image = Some(img);
+                        } else {
+                            *calibration_image = None;
+                            error!("could not take calibration image")
+                        }
+                    }
+                    if let Some(texture) =
+                        CameraStream::get_img_as_texture(ui.ctx(), self.width(), self.height())
+                    {
+                        egui::Frame::canvas(ui.style()).show(ui, |ui| {
+                            draw_texture(&texture, ui);
+                        });
+                        ui.ctx().request_repaint()
+                    }
+                });
+            } else if self.has_camera() {
+                self.make_stream()
+            } else {
+                ui.label("no active camera");
+            }
+        });
+    }
+}
+
+impl CameraModule {
+    pub fn new() -> Self {
+        Self {
+            inner: None,
+            nodes: Vec::new(),
+        }
+    }
+
+    pub fn query(&mut self) -> Result<()> {
+        self.nodes = v4l::context::enum_devices();
+        self.inner = None;
+        Ok(())
+    }
+
+    pub fn make_stream(&mut self) {
+        let camera = &self
+            .inner
+            .as_ref()
+            .expect("module should be initialised")
+            .camera;
+        CameraStream::open_stream(camera)
+    }
+
+    pub fn reset(&mut self) {
+        self.nodes = Vec::new();
+        self.inner = None;
+        CameraStream::close();
+    }
+
+    pub fn has_camera(&self) -> bool {
+        self.inner.is_some()
+    }
+
+    pub fn width(&self) -> u32 {
+        self.inner
+            .as_ref()
+            .expect("inner should be initialised")
+            .width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.inner
+            .as_ref()
+            .expect("inner should be initialised")
+            .height
+    }
+}
+impl CameraModule {
+    pub fn side_panel(&mut self, ui: &mut Ui) {
+        ui.heading("Camera Module");
+        match (!self.nodes.is_empty(), self.inner.is_some()) {
+            (false, false) => {
+                if ui.button("get cameras").clicked() {
+                    match self.query() {
+                        Ok(_) => (),
+                        Err(err) => error!("Querying failed: {}", err),
+                    }
+                }
+            }
+            (true, false) => {
+                for node in self.nodes.iter() {
+                    match node.name() {
+                        Some(name) => {
+                            ui.label(name);
+                            if ui.button("initialise").clicked() {
+                                match CamInner::new(node.index()) {
+                                    Ok(inner) => self.inner = Some(inner),
+                                    Err(err) => error!("{}", err),
+                                }
+                            }
+                        }
+                        None => warn!("could not read camera name at idx: {}", node.index()),
+                    }
+                }
+            }
+            (true, true) => {
+                self.inner
+                    .as_mut()
+                    .expect("camera should be initialised")
+                    .update(ui);
+            }
+            (false, true) => {
+                unreachable!()
+            }
+        }
+        if ui.button("reset camera").clicked() {
+            self.reset()
+        }
+    }
+}
+
+impl Default for CameraModule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub fn fetch_controls(camera: &Device) -> Result<Vec<(control::Description, Control)>> {
     let ctrl_description = camera.query_controls()?;
@@ -299,116 +435,5 @@ fn update_ctrl(
         _ => {
             ui.label(format!("not implemented, because it has type: {}", typ));
         }
-    }
-}
-
-// fn flag_ui(flags: &mut control::Flags, modify: control::Flags, ui: &mut Ui) -> bool {
-//     if ui.checkbox(&mut flags.contains(modify), format!("{}", modify)).clicked() {
-//         flags.toggle(modify);
-//         true
-//     } else {
-//         false
-//     }
-// }
-
-pub struct CameraModule {
-    inner: Option<CamInner>,
-    nodes: Vec<Node>,
-}
-
-impl CameraModule {
-    pub fn new() -> Self {
-        Self {
-            inner: None,
-            nodes: Vec::new(),
-        }
-    }
-
-    pub fn query(&mut self) -> Result<()> {
-        self.nodes = v4l::context::enum_devices();
-        self.inner = None;
-        Ok(())
-    }
-
-    pub fn make_stream(&mut self) {
-        let camera = &self
-            .inner
-            .as_ref()
-            .expect("module should be initialised")
-            .camera;
-        CameraStream::open_stream(camera)
-    }
-
-    pub fn reset(&mut self) {
-        self.nodes = Vec::new();
-        self.inner = None;
-        CameraStream::close();
-    }
-
-    pub fn has_camera(&self) -> bool {
-        self.inner.is_some()
-    }
-
-    pub fn width(&self) -> u32 {
-        self.inner
-            .as_ref()
-            .expect("inner should be initialised")
-            .width
-    }
-
-    pub fn height(&self) -> u32 {
-        self.inner
-            .as_ref()
-            .expect("inner should be initialised")
-            .height
-    }
-}
-impl CameraModule {
-    pub fn update(&mut self, ui: &mut Ui) {
-        ui.heading("Camera Module");
-        match (!self.nodes.is_empty(), self.inner.is_some()) {
-            (false, false) => {
-                if ui.button("get cameras").clicked() {
-                    match self.query() {
-                        Ok(_) => (),
-                        Err(err) => error!("Querying failed: {}", err),
-                    }
-                }
-            }
-            (true, false) => {
-                for node in self.nodes.iter() {
-                    match node.name() {
-                        Some(name) => {
-                            ui.label(name);
-                            if ui.button("initialise").clicked() {
-                                match CamInner::new(node.index()) {
-                                    Ok(inner) => self.inner = Some(inner),
-                                    Err(err) => error!("{}", err),
-                                }
-                            }
-                        }
-                        None => warn!("could not read camera name at idx: {}", node.index()),
-                    }
-                }
-            }
-            (true, true) => {
-                self.inner
-                    .as_mut()
-                    .expect("camera should be initialised")
-                    .update(ui);
-            }
-            (false, true) => {
-                unreachable!()
-            }
-        }
-        if ui.button("reset camera").clicked() {
-            self.reset()
-        }
-    }
-}
-
-impl Default for CameraModule {
-    fn default() -> Self {
-        Self::new()
     }
 }

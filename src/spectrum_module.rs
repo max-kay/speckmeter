@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use egui::{
     plot::{Plot, PlotPoints},
-    Ui,
+    Context, Ui,
 };
 use itertools::Itertools;
 use log::{error, info, warn};
@@ -10,9 +10,180 @@ use native_dialog::FileDialog;
 
 use crate::{
     calibration_module::CalibrationModule,
-    camera_module::{Image, CameraStream},
+    camera_module::{CameraStream, Image},
     csv, LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
+
+pub struct SpectrographModule {
+    take_average: usize,
+    reference: Option<AbsSpectrograph>,
+    current: Option<AbsSpectrograph>,
+    spec_buf: Vec<AbsSpectrograph>,
+    relative: bool,
+    start: f32,
+    stop: f32,
+    step: f32,
+    path: Option<PathBuf>,
+    save_next: bool,
+    filename: String,
+    comment: String,
+}
+
+impl SpectrographModule {
+    pub fn display(
+        &mut self,
+        ctx: &Context,
+        width: u32,
+        height: u32,
+        calib: &mut CalibrationModule,
+    ) {
+        egui::SidePanel::right("spectrograph_opts").show(ctx, |ui| self.side_panel(ui));
+
+        egui::CentralPanel::default().show(ctx, |ui| self.main_view(ui, width, height, calib));
+    }
+}
+
+impl SpectrographModule {
+    pub fn main_view(
+        &mut self,
+        ui: &mut Ui,
+        width: u32,
+        height: u32,
+        calib: &mut CalibrationModule,
+    ) {
+        if let Some(img) = CameraStream::get_img(width, height) {
+            if let Some(spec) =
+                AbsSpectrograph::from_img(&img, calib, self.start, self.stop, self.step)
+            {
+                self.spec_buf.push(spec);
+            } else {
+                warn!("could not generate spectrograph")
+            }
+        }
+
+        if self.spec_buf.len() >= self.take_average {
+            self.current = Some(average_spectrograph(&self.spec_buf));
+            self.spec_buf = Vec::new();
+        }
+
+        match self.current.as_ref() {
+            Some(spec) => {
+                if self.relative {
+                    match self.reference.as_ref() {
+                        Some(reference) => {
+                            let spec = RelativeSpectrum::new(spec, reference);
+                            spec.show(ui);
+                            if self.save_next {
+                                let header = csv::make_csv_header(&format!(
+                                    "{}\nthis is a relative spectrum",
+                                    self.comment
+                                ));
+                                match self.path.as_ref() {
+                                    Some(path) => match spec.write_to_csv(path, &header) {
+                                        Ok(_) => info!("saved file succesfully to {:?}", path),
+                                        Err(err) => error!("failed to save file Error: {}", err),
+                                    },
+                                    None => warn!(
+                                        "failed to save file, no path was set (shouldn't happen)"
+                                    ),
+                                }
+                                self.save_next = false
+                            }
+                        }
+                        None => {
+                            ui.label("no reference available");
+                        }
+                    }
+                } else {
+                    if self.save_next {
+                        let header = csv::make_csv_header(&format!(
+                            "{}\nthis is an unreliable absolute spectrum",
+                            self.comment
+                        ));
+                        match self.path.as_ref() {
+                            Some(path) => match spec.write_to_csv(path, &header) {
+                                Ok(_) => info!("saved file succesfully to {:?}", path),
+                                Err(err) => error!("failed to save file Error: {}", err),
+                            },
+                            None => {
+                                warn!("failed to save file, no path was set (shouldn't happen)")
+                            }
+                        }
+                        self.save_next = false
+                    }
+                    spec.show(ui)
+                }
+            }
+            None => warn!("no current image available"),
+        }
+        ui.ctx().request_repaint()
+    }
+
+    pub fn side_panel(&mut self, ui: &mut Ui) {
+        if ui.button("take reference").clicked() {
+            match self.current.as_ref() {
+                Some(spec) => {
+                    self.reference = Some(spec.clone());
+                    self.relative = true
+                }
+                None => warn!("failed to load reference"),
+            }
+        }
+
+        if self.reference.is_some() {
+            ui.checkbox(&mut self.relative, "relative");
+        }
+
+        ui.add(egui::Slider::new(&mut self.take_average, 0..=100));
+
+        ui.label("Additional comment for csv");
+        ui.text_edit_multiline(&mut self.comment);
+
+        ui.label("filename:");
+        ui.text_edit_singleline(&mut self.filename);
+
+        if ui.button("save").clicked() {
+            let dialog_result = match home::home_dir() {
+                Some(home) => FileDialog::new()
+                    .set_location(&home)
+                    .set_filename(&self.filename)
+                    .show_save_single_file(),
+                None => FileDialog::new()
+                    .set_filename(&self.filename)
+                    .show_save_single_file(),
+            };
+            match dialog_result {
+                Ok(opt) => match opt {
+                    Some(buf) => {
+                        self.path = Some(buf);
+                        self.save_next = true;
+                    }
+                    None => warn!("no path was returned"),
+                },
+                Err(err) => warn!("could not get location, Error: {}", err),
+            }
+        }
+    }
+}
+
+impl Default for SpectrographModule {
+    fn default() -> Self {
+        Self {
+            spec_buf: Vec::new(),
+            take_average: 1,
+            reference: None,
+            comment: String::new(),
+            current: None,
+            relative: false,
+            start: SMALLEST_WAVELENGTH as f32,
+            stop: LARGEST_WAVELENGTH as f32,
+            step: 1.0,
+            save_next: false,
+            path: None,
+            filename: format!("{}.csv", chrono::Local::now().format("%Y_%m_%d_%H_%M")),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AbsSpectrograph {
@@ -145,157 +316,6 @@ impl RelativeSpectrum {
             [&wavelengths, &self.values],
             header,
         )
-    }
-}
-
-pub struct SpectrographModule {
-    take_average: usize,
-    reference: Option<AbsSpectrograph>,
-    current: Option<AbsSpectrograph>,
-    spec_buf: Vec<AbsSpectrograph>,
-    relative: bool,
-    start: f32,
-    stop: f32,
-    step: f32,
-    path: Option<PathBuf>,
-    save_next: bool,
-    filename: String,
-    comment: String,
-}
-
-impl SpectrographModule {
-    pub fn main(&mut self, ui: &mut Ui, width: u32, height: u32, calib: &mut CalibrationModule) {
-        if let Some(img) = CameraStream::get_img(width, height) {
-            if let Some(spec) =
-                AbsSpectrograph::from_img(&img, calib, self.start, self.stop, self.step)
-            {
-                self.spec_buf.push(spec);
-            } else {
-                warn!("could not generate spectrograph")
-            }
-        }
-
-        if self.spec_buf.len() >= self.take_average {
-            self.current = Some(average_spectrograph(&self.spec_buf));
-            self.spec_buf = Vec::new();
-        }
-
-        match self.current.as_ref() {
-            Some(spec) => {
-                if self.relative {
-                    match self.reference.as_ref() {
-                        Some(reference) => {
-                            let spec = RelativeSpectrum::new(spec, reference);
-                            spec.show(ui);
-                            if self.save_next {
-                                let header = csv::make_csv_header(&format!(
-                                    "{}\nthis is a relative spectrum",
-                                    self.comment
-                                ));
-                                match self.path.as_ref() {
-                                    Some(path) => match spec.write_to_csv(path, &header) {
-                                        Ok(_) => info!("saved file succesfully to {:?}", path),
-                                        Err(err) => error!("failed to save file Error: {}", err),
-                                    },
-                                    None => warn!(
-                                        "failed to save file, no path was set (shouldn't happen)"
-                                    ),
-                                }
-                                self.save_next = false
-                            }
-                        }
-                        None => {
-                            ui.label("no reference available");
-                        }
-                    }
-                } else {
-                    if self.save_next {
-                        let header = csv::make_csv_header(&format!(
-                            "{}\nthis is an unreliable absolute spectrum",
-                            self.comment
-                        ));
-                        match self.path.as_ref() {
-                            Some(path) => match spec.write_to_csv(path, &header) {
-                                Ok(_) => info!("saved file succesfully to {:?}", path),
-                                Err(err) => error!("failed to save file Error: {}", err),
-                            },
-                            None => {
-                                warn!("failed to save file, no path was set (shouldn't happen)")
-                            }
-                        }
-                        self.save_next = false
-                    }
-                    spec.show(ui)
-                }
-            }
-            None => warn!("no current image available"),
-        }
-        ui.ctx().request_repaint()
-    }
-
-    pub fn side_panel(&mut self, ui: &mut Ui) {
-        if ui.button("take reference").clicked() {
-            match self.current.as_ref() {
-                Some(spec) => {
-                    self.reference = Some(spec.clone());
-                    self.relative = true
-                }
-                None => warn!("failed to load reference"),
-            }
-        }
-
-        if self.reference.is_some() {
-            ui.checkbox(&mut self.relative, "relative");
-        }
-
-        ui.add(egui::Slider::new(&mut self.take_average, 0..=100));
-
-        ui.label("Additional comment for csv");
-        ui.text_edit_multiline(&mut self.comment);
-
-        ui.label("filename:");
-        ui.text_edit_singleline(&mut self.filename);
-
-        if ui.button("save").clicked() {
-            let dialog_result = match home::home_dir() {
-                Some(home) => FileDialog::new()
-                    .set_location(&home)
-                    .set_filename(&self.filename)
-                    .show_save_single_file(),
-                None => FileDialog::new()
-                    .set_filename(&self.filename)
-                    .show_save_single_file(),
-            };
-            match dialog_result {
-                Ok(opt) => match opt {
-                    Some(buf) => {
-                        self.path = Some(buf);
-                        self.save_next = true;
-                    }
-                    None => warn!("no path was returned"),
-                },
-                Err(err) => warn!("could not get location, Error: {}", err),
-            }
-        }
-    }
-}
-
-impl Default for SpectrographModule {
-    fn default() -> Self {
-        Self {
-            spec_buf: Vec::new(),
-            take_average: 1,
-            reference: None,
-            comment: String::new(),
-            current: None,
-            relative: false,
-            start: SMALLEST_WAVELENGTH as f32,
-            stop: LARGEST_WAVELENGTH as f32,
-            step: 1.0,
-            save_next: false,
-            path: None,
-            filename: format!("{}.csv", chrono::Local::now().format("%Y_%m_%d_%H_%M")),
-        }
     }
 }
 
