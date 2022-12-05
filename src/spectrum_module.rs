@@ -5,19 +5,14 @@ use egui::{
     Ui,
 };
 use itertools::Itertools;
-use line_drawing::XiaolinWu;
 use log::{error, info, warn};
 use native_dialog::FileDialog;
 
 use crate::{
-    calibration_module::Calibration,
+    calibration_module::CalibrationModule,
     camera_module::{Image, CameraStream},
     csv, LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
-
-pub const fn rgb_lightness(r: u8, g: u8, b: u8) -> f32 {
-    (r as f32 + g as f32 + b as f32) / (255.0 * 3.0)
-}
 
 #[derive(Clone)]
 pub struct AbsSpectrograph {
@@ -30,35 +25,17 @@ pub struct AbsSpectrograph {
 impl AbsSpectrograph {
     pub fn from_img(
         img: &Image,
-        calib: &mut Calibration,
+        calib: &mut CalibrationModule,
         start: f32,
         stop: f32,
         step: f32,
     ) -> Option<Self> {
-        let width = img.width as f32;
-        let height = img.height as f32;
-
         let lines = calib.get_lines(start, stop, step)?;
 
         let mut values = Vec::with_capacity(lines.len());
 
         for line in lines.iter() {
-            let start = line.start;
-            let end = line.end;
-
-            let mut total = 0.0;
-            let mut total_weights = 0.0;
-
-            for ((x, y), s) in XiaolinWu::<_, isize>::new(
-                (start.0 * width, start.1 * height),
-                (end.0 * width, end.1 * height),
-            ) {
-                if let Some((r, g, b)) = img.get(x as usize, y as usize) {
-                    total += rgb_lightness(r, g, b) * s;
-                    total_weights += s;
-                }
-            }
-            values.push(total / total_weights);
+            values.push(img.read_line_lightness(line));
         }
         Some(Self {
             start,
@@ -171,7 +148,7 @@ impl RelativeSpectrum {
     }
 }
 
-pub struct Meter {
+pub struct SpectrographModule {
     take_average: usize,
     reference: Option<AbsSpectrograph>,
     current: Option<AbsSpectrograph>,
@@ -186,8 +163,8 @@ pub struct Meter {
     comment: String,
 }
 
-impl Meter {
-    pub fn main(&mut self, ui: &mut Ui, width: u32, height: u32, calib: &mut Calibration) {
+impl SpectrographModule {
+    pub fn main(&mut self, ui: &mut Ui, width: u32, height: u32, calib: &mut CalibrationModule) {
         if let Some(img) = CameraStream::get_img(width, height) {
             if let Some(spec) =
                 AbsSpectrograph::from_img(&img, calib, self.start, self.stop, self.step)
@@ -303,7 +280,7 @@ impl Meter {
     }
 }
 
-impl Default for Meter {
+impl Default for SpectrographModule {
     fn default() -> Self {
         Self {
             spec_buf: Vec::new(),

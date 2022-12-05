@@ -1,10 +1,11 @@
 use egui::{emath, Color32, Frame, Mesh, Pos2, Rect, TextureHandle, Ui, Vec2};
-use log::{warn, error};
+use log::{error, warn};
 
 use crate::{
-    calibration_module,
-    camera_module::{Image, CameraModule, CameraStream},
-    graph_view::Meter,
+    calibration_module::CalibrationModule,
+    camera_module::{CameraModule, CameraStream, Image},
+    spectrum_module::SpectrographModule,
+    tracer_module::TracerModule,
 };
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -14,13 +15,16 @@ pub struct SpeckApp {
     camera_module: CameraModule,
     #[serde(skip)]
     calibration_img: Option<Image>,
-    calibration: calibration_module::Calibration,
+    calibration: CalibrationModule,
     #[serde(skip)]
-    meter: Meter,
+    meter: SpectrographModule,
+    #[serde(skip)]
+    tracer: TracerModule,
     main_state: MainState,
     show_camera_opts: bool,
     show_calibration: bool,
     show_meter_opts: bool,
+    show_tracer_opts: bool,
     show_logs: bool,
 }
 
@@ -29,12 +33,14 @@ impl Default for SpeckApp {
         Self {
             camera_module: Default::default(),
             calibration_img: None,
-            calibration: calibration_module::Calibration::new(),
+            calibration: CalibrationModule::new(),
             main_state: Default::default(),
             meter: Default::default(),
+            tracer: Default::default(),
             show_camera_opts: true,
             show_calibration: false,
             show_meter_opts: false,
+            show_tracer_opts: false,
             show_logs: true,
         }
     }
@@ -46,6 +52,7 @@ enum MainState {
     CameraView,
     Calibration,
     GraphView,
+    TracerView,
 }
 
 impl SpeckApp {
@@ -72,7 +79,7 @@ impl eframe::App for SpeckApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("menu").show(ctx, |ui| self.menu(ui));
+        egui::TopBottomPanel::top("menu").show(ctx, |ui| self.side_panel_menu(ui));
 
         if self.show_camera_opts {
             egui::SidePanel::left("side_panel").show(ctx, |ui| {
@@ -93,6 +100,10 @@ impl eframe::App for SpeckApp {
             egui::SidePanel::right("meter").show(ctx, |ui| self.meter.side_panel(ui));
         }
 
+        if self.show_tracer_opts {
+            egui::SidePanel::right("tracer").show(ctx, |ui| self.tracer.side_panel(ui));
+        }
+
         if self.show_logs {}
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -102,7 +113,7 @@ impl eframe::App for SpeckApp {
 }
 
 impl SpeckApp {
-    fn menu(&mut self, ui: &mut Ui) {
+    fn side_panel_menu(&mut self, ui: &mut Ui) {
         egui::menu::bar(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.menu_button("Sidepanels", |ui| {
@@ -112,13 +123,13 @@ impl SpeckApp {
                     ui.checkbox(&mut self.show_meter_opts, "Meter Options")
                 });
                 ui.horizontal_centered(|ui| {
-                    self.side_panel_menu(ui);
+                    self.menu(ui);
                 })
             })
         });
     }
 
-    fn side_panel_menu(&mut self, ui: &mut Ui) {
+    fn menu(&mut self, ui: &mut Ui) {
         if ui
             .selectable_value(&mut self.main_state, MainState::CameraView, "📷 Camera")
             .clicked()
@@ -144,6 +155,13 @@ impl SpeckApp {
             self.close_side_panels();
             self.show_meter_opts = true;
         }
+        if ui
+            .selectable_value(&mut self.main_state, MainState::TracerView, "Tracer")
+            .clicked()
+        {
+            self.close_side_panels();
+            self.show_tracer_opts = true;
+        }
     }
 
     fn main_view(&mut self, ui: &mut Ui) {
@@ -157,7 +175,19 @@ impl SpeckApp {
             MainState::GraphView => {
                 self.graph_view(ui);
             }
+            MainState::TracerView => {
+                self.tracer_view(ui);
+            }
         }
+    }
+
+    fn tracer_view(&mut self, ui: &mut Ui) {
+        self.tracer.main(
+            ui,
+            &mut self.calibration,
+            self.camera_module.width(),
+            self.camera_module.height(),
+        )
     }
 
     fn graph_view(&mut self, ui: &mut Ui) {
@@ -229,17 +259,21 @@ impl SpeckApp {
         self.show_calibration = false;
         self.show_camera_opts = false;
         self.show_meter_opts = false;
+        self.show_tracer_opts = false;
     }
 
     fn new_calibration_img(&mut self) {
         self.camera_module.make_stream();
-        
-        if let Some(img) = CameraStream::get_img(self.camera_module.width(), self.camera_module.height()) {
+
+        if let Some(img) =
+            CameraStream::get_img(self.camera_module.width(), self.camera_module.height())
+        {
             self.calibration_img = Some(img);
             self.main_state = MainState::Calibration;
             self.show_calibration = true;
             self.show_camera_opts = false;
             self.show_meter_opts = false;
+            self.show_tracer_opts = false;
         } else {
             error!("could not take calibration image")
         }

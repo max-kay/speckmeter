@@ -19,7 +19,7 @@ pub struct CameraStream;
 
 impl CameraStream {
     pub fn get_img(width: u32, height: u32) -> Option<Image> {
-        match CAMERA_STREAM.lock().unwrap().as_mut().unwrap().next() {
+        match CAMERA_STREAM.lock().unwrap().as_mut()?.next() {
             Ok((buf, meta)) => match make_img_buf(buf, width, height) {
                 Some(img) => Some(img.into()),
                 None => {
@@ -72,15 +72,12 @@ impl CameraStream {
     }
 
     pub fn open_stream(camera: &Device) {
-        match MmapStream::with_buffers(
-            camera,
-            buffer::Type::VideoCapture,
-            5,
-        ) {
-            Ok(stream) => *CAMERA_STREAM.lock().unwrap() = Some(stream),
-            Err(err) => error!("Could not open stream:   {}", err),
+        if CAMERA_STREAM.lock().unwrap().is_none() {
+            match MmapStream::with_buffers(camera, buffer::Type::VideoCapture, 5) {
+                Ok(stream) => *CAMERA_STREAM.lock().unwrap() = Some(stream),
+                Err(err) => error!("Could not open stream:   {}", err),
+            }
         }
-        
     }
 
     pub fn close() {

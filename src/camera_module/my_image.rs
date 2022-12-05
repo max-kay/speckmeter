@@ -1,6 +1,8 @@
 use egui::{self, ColorImage, TextureHandle, Ui};
 use image::{buffer::ConvertBuffer, ImageBuffer, Rgb, RgbaImage};
-use std::vec::Vec;
+use line_drawing::XiaolinWu;
+
+use crate::calibration_module::Line;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Image {
@@ -48,6 +50,25 @@ impl Image {
     pub fn aspect_ratio(&self) -> f32 {
         self.width as f32 / self.height as f32
     }
+
+    pub fn read_line_lightness(&self, line: &Line) -> f32 {
+        let start = line.start;
+        let end = line.end;
+
+        let mut total = 0.0;
+        let mut total_weights = 0.0;
+
+        for ((x, y), s) in XiaolinWu::<_, isize>::new(
+            (start.0 * self.width as f32, start.1 * self.height as f32),
+            (end.0 * self.width as f32, end.1 * self.height as f32),
+        ) {
+            if let Some((r, g, b)) = self.get(x as usize, y as usize) {
+                total += rgb_lightness(r, g, b) * s;
+                total_weights += s;
+            }
+        }
+        total / total_weights
+    }
 }
 
 impl From<ImageBuffer<Rgb<u8>, &[u8]>> for Image {
@@ -59,4 +80,8 @@ impl From<ImageBuffer<Rgb<u8>, &[u8]>> for Image {
             texture: None,
         }
     }
+}
+
+pub const fn rgb_lightness(r: u8, g: u8, b: u8) -> f32 {
+    (r as f32 + g as f32 + b as f32) / (255.0 * 3.0)
 }

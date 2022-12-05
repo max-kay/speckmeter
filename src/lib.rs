@@ -8,9 +8,10 @@ mod calibration_module;
 mod camera_module;
 mod csv;
 mod fitting;
-mod graph_view;
-mod line_tracer;
 mod log;
+mod spectrum_module;
+mod tracer_module;
+
 pub use app::SpeckApp;
 
 pub const SMALLEST_WAVELENGTH: u16 = 380;

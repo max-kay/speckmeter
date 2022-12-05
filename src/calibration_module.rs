@@ -10,7 +10,7 @@ use crate::{
 };
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
-pub struct Calibration {
+pub struct CalibrationModule {
     lines: Vec<(u16, Line)>,
     start: Option<(f32, f32)>,
     current_line: Option<Line>,
@@ -26,7 +26,7 @@ pub struct Calibration {
     spectral: Option<SpectralLines>,
 }
 
-impl Calibration {
+impl CalibrationModule {
     pub fn new() -> Self {
         Self {
             lines: Vec::new(),
@@ -43,11 +43,11 @@ impl Calibration {
         }
     }
 
-    pub fn start_line(&mut self, pos: Pos2) {
+    fn start_line(&mut self, pos: Pos2) {
         self.start = Some((pos.x, pos.y))
     }
 
-    pub fn end_line(&mut self, pos: Pos2) {
+    fn end_line(&mut self, pos: Pos2) {
         match self.start {
             Some(start) => {
                 self.start = None;
@@ -60,7 +60,7 @@ impl Calibration {
         }
     }
 
-    pub fn add_new_wavelength(&mut self, wavelength: u16) {
+    fn add_new_wavelength(&mut self, wavelength: u16) {
         match self.current_line {
             Some(line) => self.lines.push((wavelength, line)),
             None => warn!("tried to add wave length with no active line"),
@@ -68,7 +68,7 @@ impl Calibration {
         self.current_line = None;
     }
 
-    pub fn validate(&mut self) -> bool {
+    fn validate(&mut self) -> bool {
         if self.horizontal_lines {
             self.lines
                 .iter_mut()
@@ -119,6 +119,13 @@ impl Calibration {
         }
         Some(lines)
     }
+
+    pub fn get_line(&mut self, wavelength: f32) -> Option<Line> {
+        if self.spectral.is_none() {
+            self.generate_regression()?
+        }
+        Some(self.spectral.as_ref().unwrap().line_with_wavelength(wavelength))
+    }
 }
 
 const ACTIVE_LINE_STROKE: (f32, Color32) = (5.0, Color32::WHITE);
@@ -126,7 +133,7 @@ const DRAWN_LINE_STROKE: (f32, Color32) = (5.0, Color32::RED);
 const GEN_LINE_STROKE: (f32, Color32) = (2.0, Color32::RED);
 const TEXT_COLOR: Color32 = Color32::WHITE;
 
-impl Calibration {
+impl CalibrationModule {
     pub fn main_view(
         &mut self,
         ui: &mut Ui,
