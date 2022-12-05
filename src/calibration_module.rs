@@ -169,7 +169,7 @@ impl CalibrationModule {
 
 const ACTIVE_LINE_STROKE: (f32, Color32) = (5.0, Color32::WHITE);
 const DRAWN_LINE_STROKE: (f32, Color32) = (5.0, Color32::RED);
-const GEN_LINE_STROKE: (f32, Color32) = (2.0, Color32::RED);
+const GEN_LINE_STROKE: (f32, Color32) = (2.0, Color32::BLACK);
 const TEXT_COLOR: Color32 = Color32::WHITE;
 
 impl CalibrationModule {
@@ -217,7 +217,6 @@ impl CalibrationModule {
                     spectral.bottom_line.to_points(to_screen),
                     ACTIVE_LINE_STROKE,
                 );
-                // return; // TODO
             }
         }
         // paint lines drawn by the user and its corresponding wavelength

@@ -36,7 +36,6 @@ impl Image {
 
     pub fn get(&self, x: usize, y: usize) -> Option<(u8, u8, u8)> {
         if self.width < x {
-            // TODO check this logic
             return None;
         }
         let index = 3 * (y * self.width + x);
