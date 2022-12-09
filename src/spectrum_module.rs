@@ -10,7 +10,7 @@ use native_dialog::FileDialog;
 
 use crate::{
     calibration_module::CalibrationModule,
-    camera_module::{CameraStream, Image},
+    camera_module::{CameraModule, Image},
     csv, LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
 
@@ -33,13 +33,12 @@ impl SpectrographModule {
     pub fn display(
         &mut self,
         ctx: &Context,
-        width: u32,
-        height: u32,
+        camera: &mut CameraModule,
         calib: &mut CalibrationModule,
     ) {
         egui::SidePanel::right("spectrograph_opts").show(ctx, |ui| self.side_panel(ui));
 
-        egui::CentralPanel::default().show(ctx, |ui| self.main_view(ui, width, height, calib));
+        egui::CentralPanel::default().show(ctx, |ui| self.main_view(ui, camera, calib));
     }
 }
 
@@ -47,18 +46,22 @@ impl SpectrographModule {
     pub fn main_view(
         &mut self,
         ui: &mut Ui,
-        width: u32,
-        height: u32,
+        camera: &mut CameraModule,
         calib: &mut CalibrationModule,
     ) {
-        if let Some(img) = CameraStream::get_img(width, height) {
-            if let Some(spec) =
-                AbsSpectrograph::from_img(&img, calib, self.start, self.stop, self.step)
-            {
-                self.spec_buf.push(spec);
-            } else {
-                warn!("could not generate spectrograph")
+        match camera.get_img() {
+            Ok(img) => {
+                if let Some(spec) =
+                    AbsSpectrograph::from_img(&img, calib, self.start, self.stop, self.step)
+                {
+                    self.spec_buf.push(spec);
+                } else {
+                    warn!("could not generate spectrograph")
+                }
             }
+            Err(err) => {
+                warn!("could not get image Error: {}", err);
+            },
         }
 
         if self.spec_buf.len() >= self.take_average {

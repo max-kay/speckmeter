@@ -6,7 +6,7 @@ use std::{f32::consts::PI, mem::swap};
 
 use crate::{
     app::{draw_texture, MainState},
-    camera_module::{CameraStream, Image},
+    camera_module::{CameraModule, Image},
     fitting::{self, Cost, Gradient},
     LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
@@ -32,9 +32,8 @@ impl CalibrationModule {
         &mut self,
         ctx: &Context,
         main_state: &mut MainState,
+        camera: &mut CameraModule,
         calibration_image: &mut Option<Image>,
-        width: u32,
-        height: u32,
     ) {
         egui::SidePanel::right("spectrograph_opts").show(ctx, |ui| self.side_panel(ui));
         egui::CentralPanel::default().show(ctx, |ui| match calibration_image.as_mut() {
@@ -46,10 +45,13 @@ impl CalibrationModule {
                             *main_state = MainState::CameraView;
                         }
                         if ui.button("take calibration image").clicked() {
-                            if let Some(img) = CameraStream::get_img(width, height) {
-                                *calibration_image = Some(img);
-                            } else {
-                                error!("could not take calibration image")
+                            match camera.get_img() {
+                                Ok(img) => {
+                                    *calibration_image = Some(img);
+                                }
+                                Err(err) => {
+                                    error!("could not take calibration image Error: {}", err)
+                                }
                             }
                         }
                     })
@@ -57,7 +59,7 @@ impl CalibrationModule {
             }
             Some(img) => {
                 let aspect_ratio = img.aspect_ratio();
-                let texture = img.get_texture(ui);
+                let texture = img.get_texture(ui.ctx());
                 ui.vertical_centered(|ui| {
                     let style = ui.style();
                     Frame::canvas(style).show(ui, |ui| {

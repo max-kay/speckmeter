@@ -77,21 +77,18 @@ impl eframe::App for SpeckApp {
             MainState::Calibration => self.calibration_module.display(
                 ctx,
                 &mut self.main_state,
+                &mut self.camera_module,
                 &mut self.calibration_img,
-                self.camera_module.width(),
-                self.camera_module.height(),
             ),
             MainState::GraphView => self.spectrograph_module.display(
                 ctx,
-                self.camera_module.width(),
-                self.camera_module.height(),
+                &mut self.camera_module,
                 &mut self.calibration_module,
             ),
             MainState::TracerView => self.tracer_module.display(
                 ctx,
+                &mut self.camera_module,
                 &mut self.calibration_module,
-                self.camera_module.width(),
-                self.camera_module.height(),
             ),
         }
 
