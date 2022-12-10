@@ -3,11 +3,12 @@ use log::{error, warn};
 use nokhwa::{
     pixel_format::RgbFormat,
     utils::{
-        CameraControl, CameraIndex, CameraInfo, ControlValueSetter, FrameFormat, RequestedFormat,
+        CameraControl, CameraIndex, CameraInfo, ControlValueDescription, FrameFormat,
+        RequestedFormat,
     },
     Camera, NokhwaError,
 };
-use std::{any::Any, error::Error, fmt::Display};
+use std::{error::Error, fmt::Display};
 
 pub mod my_image;
 
@@ -23,6 +24,22 @@ pub struct CameraModule {
 impl CameraModule {
     pub fn display(&mut self, ctx: &Context, calibration_image: &mut Option<Image>) {
         egui::SidePanel::left("spectrograph_opts").show(ctx, |ui| self.side_panel(ui));
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if self.active_camera.is_none(){
+                ui.heading("No active camera");
+                return;
+            }
+            let cam = self.active_camera.as_mut().unwrap();
+            match cam.get_img(){
+                Err(err) => error!("could not get new image, Error: {}", err),
+                Ok(mut image) => {
+                    if ui.button("take calibration image").clicked() {
+                        draw_texture(image.get_texture(ui.ctx()), ui);
+                        *calibration_image = Some(image);
+                    }
+                },
+            }
+        });
     }
 }
 
@@ -34,7 +51,6 @@ impl CameraModule {
         }
     }
 
-    // #[cfg(target_os = "linux")]
     pub fn query(&mut self) -> Result<(), NokhwaError> {
         self.devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)?;
         self.active_camera = None;
@@ -69,7 +85,7 @@ impl CameraModule {
             for device in self.devices.iter() {
                 ui.label(device.human_name());
                 if ui.button("initialise").clicked() {
-                    match ActiveCamera::new(*device.index()) {
+                    match ActiveCamera::new(device.index().clone()) {
                         Ok(inner) => self.active_camera = Some(inner),
                         Err(err) => error!("{}", err),
                     }
@@ -79,9 +95,8 @@ impl CameraModule {
         }
 
         if ui.button("get cameras").clicked() {
-            match self.query() {
-                Ok(_) => todo!(),
-                Err(err) => error!("Querying failed: {}", err),
+            if let Err(err) = self.query() {
+                error!("Querying failed: {}", err)
             }
         }
     }
@@ -101,8 +116,8 @@ struct ActiveCamera {
 
 impl ActiveCamera {
     fn new(index: CameraIndex) -> Result<Self, NokhwaError> {
-        let format: RequestedFormat<'_> = RequestedFormat::new::<RgbFormat>(
-            nokhwa::utils::RequestedFormatType::HighestResolutionAbs,
+        let format = RequestedFormat::new::<RgbFormat>(
+            nokhwa::utils::RequestedFormatType::None,
         );
         let camera = Camera::new(index, format)?;
         let controls = camera.camera_controls()?;
@@ -119,7 +134,10 @@ impl ActiveCamera {
         ui.heading("Camera Module");
         ui.strong(self.camera.info().human_name());
 
-        self.camera.refresh_camera_format();
+        match self.camera.refresh_camera_format() {
+            Ok(_) => (),
+            Err(err) => error!("could not refresh camera format, Error: {}", err),
+        };
         let current_format = self.camera.camera_format();
         let mut current_resolution = current_format.resolution(); // mut because it is used to search for framerates after setting resolution
         let current_frame_rate = current_format.frame_rate();
@@ -198,61 +216,26 @@ impl ActiveCamera {
 
         ui.checkbox(&mut self.show_controls, "show controls");
         if self.show_controls {
-            self.control_ui(ui);
+            self.all_controls_ui(ui);
         }
     }
 
-    fn control_ui(&mut self, ui: &mut Ui) {
-        if let Err(err) = self.fetch_controls() {
-            ui.label("failed to fetch camera controls");
-            error!("failed to fetch controls, Error: {}", err);
-            return;
+    fn all_controls_ui(&mut self, ui: &mut Ui) {
+        if ui.button("fetch controls").clicked() {
+            if let Err(err) = self.fetch_controls() {
+                ui.label("failed to fetch camera controls");
+                error!("failed to fetch controls, Error: {}", err);
+                return;
+            }
         }
         for control in self.controls.iter_mut() {
-            ui.label(format!("{}", control.control()));
-            ui.label(format!("flags: {:?}", control.flag()));
-
-            // let mut active = control.active();
-            // if ui.checkbox(&mut active, "active").clicked() {
-            //     println!("{} and {}", active, control.active());
-            //     control.set_active(active);
-            //     if let Err(err) = self.camera. {
-            //         error!(
-            //             "could not set control value for {}, Error: {}",
-            //             control.control(),
-            //             err
-            //         )
-            //     }
-            // }
-
-            match control.value() {
-                ControlValueSetter::Integer(val) => {]
-                    if 
-                },
-                ControlValueSetter::Float(_) => todo!(),
-                ControlValueSetter::Boolean(mut val) => {
-                    if ui.checkbox(&mut val, "").clicked() {
-                        if let Err(err) = self.camera
-                            .set_camera_control(control.control(), ControlValueSetter::Boolean(val)) {
-                                error!("could not set control value {}", err)
-                            }
-                    }
-                }
-                _ => warn!("ignoring the control value: {}", control.value()),
-            };
-            if ui
-                .add(Slider::new(
-                    &mut value,
-                    control.minimum_value()..=control.maximum_value(),
-                ))
-                .changed()
-            {
-                if let Err(err) = control.set_value(value) {
-                    error!("failed to set value of {}, Error: {}", control, err)
-                }
-                if let Err(err) = self.camera.set_camera_control(*control) {
+            if control_ui(ui, control) {
+                if let Err(err) = self
+                    .camera
+                    .set_camera_control(control.control(), control.value())
+                {
                     error!(
-                        "could not set control value for {}, Error: {}",
+                        "failed to set control: {}, Error: {}",
                         control.control(),
                         err
                     )
@@ -267,13 +250,137 @@ impl ActiveCamera {
     }
 }
 
+fn control_ui(ui: &mut Ui, control: &mut CameraControl) -> bool {
+    ui.label(format!("{}", control.control()));
+    ui.label(format!("flags: {:?}", control.flag()));
+    let descr = control.description().clone();
+    match descr {
+        ControlValueDescription::Integer {
+            mut value,
+            default,
+            step,
+        } => {
+            let response = ui.add(DragValue::new(&mut value));
+            if response.changed() {
+                let description = ControlValueDescription::Integer {
+                    value,
+                    default,
+                    step,
+                };
+                *control = CameraControl::new(
+                    control.control(),
+                    control.name().to_string(),
+                    description,
+                    control.flag().to_vec(),
+                    control.active(),
+                )
+            }
+            if response.drag_released() {
+                let val = (value / step) * step;
+                let description = ControlValueDescription::Integer {
+                    value: val,
+                    default,
+                    step,
+                };
+                *control = CameraControl::new(
+                    control.control(),
+                    control.name().to_string(),
+                    description,
+                    control.flag().to_vec(),
+                    control.active(),
+                );
+                true
+            } else {
+                false
+            }
+        }
+        ControlValueDescription::IntegerRange {
+            min,
+            max,
+            mut value,
+            step,
+            default,
+        } => {
+            let response = ui.add(DragValue::new(&mut value));
+            if response.changed() {
+                let description = ControlValueDescription::Integer {
+                    value,
+                    default,
+                    step,
+                };
+                *control = CameraControl::new(
+                    control.control(),
+                    control.name().to_string(),
+                    description,
+                    control.flag().to_vec(),
+                    control.active(),
+                )
+            }
+            if response.drag_released() {
+                let mut val = ((value - min) / step) * step + min;
+                if val >= max {
+                    val = max - step
+                }
+                let description = ControlValueDescription::IntegerRange {
+                    min,
+                    max,
+                    value: val,
+                    default,
+                    step,
+                };
+                *control = CameraControl::new(
+                    control.control(),
+                    control.name().to_string(),
+                    description,
+                    control.flag().to_vec(),
+                    control.active(),
+                );
+                true
+            } else {
+                false
+            }
+        }
+        ControlValueDescription::Boolean { mut value, default } => {
+            if ui.checkbox(&mut value, "??").changed() {
+                let description = ControlValueDescription::Boolean { value, default };
+                *control = CameraControl::new(
+                    control.control(),
+                    control.name().to_string(),
+                    description,
+                    control.flag().to_vec(),
+                    control.active(),
+                );
+                true
+            } else {
+                false
+            }
+        }
+        // ControlValueDescription::Float {
+        //     value,
+        //     default,
+        //     step,
+        // } => todo!(),
+        // ControlValueDescription::FloatRange {
+        //     min,
+        //     max,
+        //     value,
+        //     step,
+        //     default,
+        // } => todo!(),
+        _ => {
+            warn!("ignoring the control value: {}", control.value());
+            false
+        }
+    }
+}
+
 impl ActiveCamera {
     fn get_img(&mut self) -> Result<Image, NokhwaError> {
         if !self.camera.is_stream_open() {
             self.camera.open_stream()?
         }
         let buf = self.camera.frame()?;
-        Ok(buf.into())
+        Image::new(buf)
     }
 }
 

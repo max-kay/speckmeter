@@ -1,6 +1,7 @@
 use egui::{self, ColorImage, Context, TextureHandle};
 use image::{ImageBuffer, Rgb, RgbaImage, buffer::ConvertBuffer};
 use line_drawing::XiaolinWu;
+use nokhwa::{utils::FrameFormat, NokhwaError, pixel_format::RgbFormat};
 
 use crate::calibration_module::Line;
 
@@ -75,6 +76,12 @@ impl From<ImageBuffer<Rgb<u8>, Vec<u8>>> for Image {
             data: value.into_vec(),
             texture: None
         }
+    }
+}
+
+impl Image {
+    pub fn new(value: nokhwa::Buffer) -> Result<Self, NokhwaError> {
+        Ok(value.decode_image::<RgbFormat>()?.into())
     }
 }
 
