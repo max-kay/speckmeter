@@ -1,57 +1,43 @@
-use core::panic;
-use egui::{Context, Slider, Ui};
+use egui::{Context, DragValue, Slider, TextureHandle, Ui};
 use log::{error, warn};
-use std::io::Result;
-use v4l::{
-    context::Node,
-    control,
-    format::Colorspace,
-    frameinterval::FrameIntervalEnum,
-    prelude::*,
-    video::{capture::Parameters, Capture},
-    Control, Format, FourCC, Fraction,
+use nokhwa::{
+    pixel_format::RgbFormat,
+    utils::{
+        CameraControl, CameraIndex, CameraInfo, ControlValueDescription, FrameFormat,
+        RequestedFormat,
+    },
+    Camera, NokhwaError,
 };
+use std::{error::Error, fmt::Display};
 
-pub mod camera_stream;
 pub mod my_image;
 
-pub use camera_stream::CameraStream;
 pub use my_image::Image;
 
 use crate::app::draw_texture;
 
 pub struct CameraModule {
-    inner: Option<CamInner>,
-    nodes: Vec<Node>,
+    active_camera: Option<ActiveCamera>,
+    devices: Vec<CameraInfo>,
 }
 
 impl CameraModule {
     pub fn display(&mut self, ctx: &Context, calibration_image: &mut Option<Image>) {
         egui::SidePanel::left("spectrograph_opts").show(ctx, |ui| self.side_panel(ui));
         egui::CentralPanel::default().show(ctx, |ui| {
-            if CameraStream::is_open() {
-                ui.vertical_centered(|ui| {
+            if self.active_camera.is_none(){
+                ui.heading("No active camera");
+                return;
+            }
+            let cam = self.active_camera.as_mut().unwrap();
+            match cam.get_img(){
+                Err(err) => error!("could not get new image, Error: {}", err),
+                Ok(mut image) => {
                     if ui.button("take calibration image").clicked() {
-                        if let Some(img) = CameraStream::get_img(self.width(), self.height()) {
-                            *calibration_image = Some(img);
-                        } else {
-                            *calibration_image = None;
-                            error!("could not take calibration image")
-                        }
+                        draw_texture(image.get_texture(ui.ctx()), ui);
+                        *calibration_image = Some(image);
                     }
-                    if let Some(texture) =
-                        CameraStream::get_img_as_texture(ui.ctx(), self.width(), self.height())
-                    {
-                        egui::Frame::canvas(ui.style()).show(ui, |ui| {
-                            draw_texture(&texture, ui);
-                        });
-                        ui.ctx().request_repaint()
-                    }
-                });
-            } else if self.has_camera() {
-                self.make_stream()
-            } else {
-                ui.label("no active camera");
+                },
             }
         });
     }
@@ -60,90 +46,58 @@ impl CameraModule {
 impl CameraModule {
     pub fn new() -> Self {
         Self {
-            inner: None,
-            nodes: Vec::new(),
+            active_camera: None,
+            devices: Vec::new(),
         }
     }
 
-    pub fn query(&mut self) -> Result<()> {
-        self.nodes = v4l::context::enum_devices();
-        self.inner = None;
+    pub fn query(&mut self) -> Result<(), NokhwaError> {
+        self.devices = nokhwa::query(nokhwa::utils::ApiBackend::Auto)?;
+        self.active_camera = None;
         Ok(())
     }
 
-    pub fn make_stream(&mut self) {
-        let camera = &self
-            .inner
-            .as_ref()
-            .expect("module should be initialised")
-            .camera;
-        CameraStream::open_stream(camera)
-    }
-
     pub fn reset(&mut self) {
-        self.nodes = Vec::new();
-        self.inner = None;
-        CameraStream::close();
+        self.devices = Vec::new();
+        self.active_camera = None;
     }
 
-    pub fn has_camera(&self) -> bool {
-        self.inner.is_some()
-    }
-
-    pub fn width(&self) -> u32 {
-        self.inner
-            .as_ref()
-            .expect("inner should be initialised")
-            .width
-    }
-
-    pub fn height(&self) -> u32 {
-        self.inner
-            .as_ref()
-            .expect("inner should be initialised")
-            .height
+    pub fn get_img(&mut self) -> Result<Image, Box<dyn Error>> {
+        match self.active_camera.as_mut() {
+            Some(cam) => Ok(cam.get_img()?),
+            None => Err(CameraError::CameraNotActive)?,
+        }
     }
 }
+
 impl CameraModule {
     pub fn side_panel(&mut self, ui: &mut Ui) {
         ui.heading("Camera Module");
-        match (!self.nodes.is_empty(), self.inner.is_some()) {
-            (false, false) => {
-                if ui.button("get cameras").clicked() {
-                    match self.query() {
-                        Ok(_) => (),
-                        Err(err) => error!("Querying failed: {}", err),
-                    }
-                }
-            }
-            (true, false) => {
-                for node in self.nodes.iter() {
-                    match node.name() {
-                        Some(name) => {
-                            ui.label(name);
-                            if ui.button("initialise").clicked() {
-                                match CamInner::new(node.index()) {
-                                    Ok(inner) => self.inner = Some(inner),
-                                    Err(err) => error!("{}", err),
-                                }
-                            }
-                        }
-                        None => warn!("could not read camera name at idx: {}", node.index()),
-                    }
-                }
-            }
-            (true, true) => {
-                self.inner
-                    .as_mut()
-                    .expect("camera should be initialised")
-                    .update(ui);
-            }
-            (false, true) => {
-                unreachable!()
-            }
-        }
         if ui.button("reset camera").clicked() {
             self.reset()
+        }
+        if let Some(cam) = self.active_camera.as_mut() {
+            cam.side_panel(ui);
+            return;
+        }
+
+        if !self.devices.is_empty() {
+            for device in self.devices.iter() {
+                ui.label(device.human_name());
+                if ui.button("initialise").clicked() {
+                    match ActiveCamera::new(device.index().clone()) {
+                        Ok(inner) => self.active_camera = Some(inner),
+                        Err(err) => error!("{}", err),
+                    }
+                }
+            }
+            return;
+        }
+
+        if ui.button("get cameras").clicked() {
+            if let Err(err) = self.query() {
+                error!("Querying failed: {}", err)
+            }
         }
     }
 }
@@ -154,286 +108,293 @@ impl Default for CameraModule {
     }
 }
 
-pub fn fetch_controls(camera: &Device) -> Result<Vec<(control::Description, Control)>> {
-    let ctrl_description = camera.query_controls()?;
-    let mut controls = Vec::new();
-    for d in ctrl_description {
-        match camera.control(d.id) {
-            Ok(control) => controls.push((d, control)),
-            Err(err) => warn!(
-                "failed to load value for {} disregarding it. Err:{}",
-                d.name, err
-            ),
-        }
-    }
-    Ok(controls)
-}
-
-pub fn set_control(cam: &Device, ctrl: Control) -> Result<()> {
-    CameraStream::close();
-    cam.set_control(ctrl)
-}
-
-struct CamInner {
-    camera: Device,
-    controls: Vec<(control::Description, Control)>,
-    color_space: Colorspace,
-    fourcc: FourCC,
-    width: u32,
-    height: u32,
-    interval: Fraction,
+struct ActiveCamera {
+    camera: Camera,
+    controls: Vec<CameraControl>,
     show_controls: bool,
 }
 
-impl CamInner {
-    fn new(index: usize) -> Result<Self> {
-        let camera = Device::new(index)?;
-        // let caps = camera.query_caps()?;
-
-        let mut formats = camera.enum_formats()?;
-        formats.retain(|f| f.fourcc == FourCC::new(b"RGB3"));
-        let mut format = camera.format()?;
-        if !formats.is_empty() {
-            format.fourcc = formats[0].fourcc;
-            match camera.set_format(&format) {
-                Ok(f) => format = f,
-                Err(err) => return Err(err),
-            };
-        }
-
-        let controls = fetch_controls(&camera)?;
-
-        let param = camera.params()?;
+impl ActiveCamera {
+    fn new(index: CameraIndex) -> Result<Self, NokhwaError> {
+        let format = RequestedFormat::new::<RgbFormat>(
+            nokhwa::utils::RequestedFormatType::None,
+        );
+        let camera = Camera::new(index, format)?;
+        let controls = camera.camera_controls()?;
         Ok(Self {
             camera,
             controls,
-            color_space: format.colorspace,
-            fourcc: format.fourcc,
-            width: format.width,
-            height: format.height,
-            interval: param.interval,
             show_controls: false,
         })
     }
 }
 
-impl CamInner {
-    fn update(&mut self, ui: &mut Ui) {
+impl ActiveCamera {
+    fn side_panel(&mut self, ui: &mut Ui) {
+        ui.heading("Camera Module");
+        ui.strong(self.camera.info().human_name());
+
+        match self.camera.refresh_camera_format() {
+            Ok(_) => (),
+            Err(err) => error!("could not refresh camera format, Error: {}", err),
+        };
+        let current_format = self.camera.camera_format();
+        let mut current_resolution = current_format.resolution(); // mut because it is used to search for framerates after setting resolution
+        let current_frame_rate = current_format.frame_rate();
+
+        if current_format.format() != FrameFormat::RAWRGB {
+            if let Err(err) = self.camera.set_frame_format(FrameFormat::RAWRGB) {
+                error!("failed to set frame format, Error: {}", err);
+            }
+        }
+
         ui.label(format!(
-            "{}x{}\n{} - {}",
-            self.width,
-            self.height,
-            self.fourcc
-                .str()
-                .expect("FourCC not representable as string"),
-            self.color_space,
+            "{}, {} FPS",
+            current_resolution, current_frame_rate
         ));
 
-        egui::ComboBox::from_label("format")
-            .selected_text(self.fourcc.str().expect("FourCC not utf-8"))
-            .show_ui(ui, |ui| match self.camera.enum_formats() {
-                Ok(formats) => {
-                    for f in formats {
-                        if ui
-                            .selectable_label(
-                                self.fourcc == f.fourcc,
-                                f.fourcc.str().expect("FourCC not utf-8"),
-                            )
-                            .clicked()
-                        {
-                            CameraStream::close();
-                            match self.camera.set_format(&Format::new(
-                                self.width,
-                                self.height,
-                                f.fourcc,
-                            )) {
-                                Ok(format) => {
-                                    self.width = format.width;
-                                    self.height = format.height;
-                                    self.fourcc = format.fourcc;
-                                }
-                                Err(err) => error!("{}", err),
-                            };
+        match self.camera.compatible_fourcc() {
+            Ok(compatible_formats) => {
+                for frame_format in compatible_formats {
+                    if ui
+                        .selectable_label(
+                            current_format.format() == frame_format,
+                            frame_format.to_string(),
+                        )
+                        .clicked()
+                    {
+                        match self.camera.set_frame_format(frame_format) {
+                            Ok(_) => (),
+                            Err(err) => error!("could not set camera format Error: {}", err),
                         }
                     }
                 }
-                Err(err) => error!("{}", err),
-            });
-
-        egui::ComboBox::from_label("size")
-            .selected_text(format!("{}x{}", self.width, self.height))
-            .show_ui(ui, |ui| match self.camera.enum_framesizes(self.fourcc) {
-                Ok(sizes) => {
-                    for s in sizes {
-                        for size in s.size.to_discrete() {
-                            let width = size.width;
-                            let height = size.height;
-                            if ui
-                                .selectable_label(
-                                    self.width == width && self.height == height,
-                                    format!("{}x{}", width, height),
-                                )
-                                .clicked()
-                            {
-                                CameraStream::close();
-                                match self.camera.set_format(&Format::new(
-                                    width,
-                                    height,
-                                    self.fourcc,
-                                )) {
-                                    Ok(format) => {
-                                        self.width = format.width;
-                                        self.height = format.height;
-                                        self.fourcc = format.fourcc;
-                                    }
-                                    Err(err) => error!("{}", err),
-                                }
-                            };
-                        }
-                    }
-                }
-                Err(err) => error!("{}", err),
-            });
-
-        egui::ComboBox::from_label("FPS")
-        .selected_text((self.interval.denominator as f32 / self.interval.numerator as f32).to_string())
-        .show_ui(ui, |ui| {
-            match self
-                .camera
-                .enum_frameintervals(self.fourcc, self.width, self.height)
-            {
-                Ok(stuff) => {
-                    for elem in stuff {
-                        match elem.interval {
-                            FrameIntervalEnum::Discrete(interval) => {
-                                if ui
-                                    .selectable_label(
-                                        self.interval.numerator == interval.numerator
-                                            && self.interval.denominator == interval.denominator,
-                                        (interval.denominator as f32 / interval.numerator as f32)
-                                            .to_string(),
-                                    )
-                                    .clicked()
-                                {
-                                    CameraStream::close();
-                                    match self.camera.set_params(&Parameters::new(interval)) {
-                                        Ok(para) => {
-                                            self.interval = para.interval;
-                                        }
-                                        Err(err) => error!("{}", err),
-                                    }
-                                }
-                            }
-                            FrameIntervalEnum::Stepwise(_) =>{
-                                error!("if this error shows up you'll have some pain implementing this :)");
-                                todo!()
-                            },
-                        }
-                    }
-                }
-                Err(err) => error!("{}", err),
             }
-        });
+            Err(err) => {
+                error!("could not querry compatible frame formats, Error: {}", err);
+                ui.label("could not querry frame formats");
+                return;
+            }
+        }
+
+        match self
+            .camera
+            .compatible_list_by_resolution(current_format.format())
+        {
+            Ok(resolutions_map) => {
+                let mut compatible_resolutions = Vec::from_iter(resolutions_map.keys());
+                compatible_resolutions.sort();
+                for resolution in compatible_resolutions {
+                    if ui
+                        .selectable_label(current_resolution == *resolution, resolution.to_string())
+                        .clicked()
+                    {
+                        if let Err(err) = self.camera.set_resolution(*resolution) {
+                            error!("{}", err)
+                        }
+                        current_resolution = *resolution
+                    }
+                }
+
+                for frame_rate in resolutions_map.get(&current_resolution).unwrap() {
+                    if ui
+                        .selectable_label(current_frame_rate == *frame_rate, frame_rate.to_string())
+                        .clicked()
+                    {
+                        if let Err(err) = self.camera.set_frame_rate(*frame_rate) {
+                            error!("{}", err)
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                error!("could not querry compatible frame formats, Error: {}", err);
+                ui.label("could not querry frame formats");
+                return;
+            }
+        }
 
         ui.checkbox(&mut self.show_controls, "show controls");
         if self.show_controls {
-            if ui.button("refetch controls").clicked() {
-                match fetch_controls(&self.camera) {
-                    Ok(vec) => self.controls = vec,
-                    Err(err) => error!("could not fetch controls {}", err),
+            self.all_controls_ui(ui);
+        }
+    }
+
+    fn all_controls_ui(&mut self, ui: &mut Ui) {
+        if ui.button("fetch controls").clicked() {
+            if let Err(err) = self.fetch_controls() {
+                ui.label("failed to fetch camera controls");
+                error!("failed to fetch controls, Error: {}", err);
+                return;
+            }
+        }
+        for control in self.controls.iter_mut() {
+            if control_ui(ui, control) {
+                if let Err(err) = self
+                    .camera
+                    .set_camera_control(control.control(), control.value())
+                {
+                    error!(
+                        "failed to set control: {}, Error: {}",
+                        control.control(),
+                        err
+                    )
                 }
+            };
+        }
+    }
+
+    fn fetch_controls(&mut self) -> Result<(), NokhwaError> {
+        self.controls = self.camera.camera_controls()?;
+        Ok(())
+    }
+}
+
+fn control_ui(ui: &mut Ui, control: &mut CameraControl) -> bool {
+    ui.label(format!("{}", control.control()));
+    ui.label(format!("flags: {:?}", control.flag()));
+    let descr = control.description().clone();
+    match descr {
+        ControlValueDescription::Integer {
+            mut value,
+            default,
+            step,
+        } => {
+            let response = ui.add(DragValue::new(&mut value));
+            if response.changed() {
+                let description = ControlValueDescription::Integer {
+                    value,
+                    default,
+                    step,
+                };
+                *control = CameraControl::new(
+                    control.control(),
+                    control.name().to_string(),
+                    description,
+                    control.flag().to_vec(),
+                    control.active(),
+                )
             }
-            for (description, control) in self.controls.iter_mut() {
-                update_ctrl(ui, description, control, &self.camera);
+            if response.drag_released() {
+                let val = (value / step) * step;
+                let description = ControlValueDescription::Integer {
+                    value: val,
+                    default,
+                    step,
+                };
+                *control = CameraControl::new(
+                    control.control(),
+                    control.name().to_string(),
+                    description,
+                    control.flag().to_vec(),
+                    control.active(),
+                );
+                true
+            } else {
+                false
             }
+        }
+        ControlValueDescription::IntegerRange {
+            min,
+            max,
+            mut value,
+            step,
+            default,
+        } => {
+            let response = ui.add(DragValue::new(&mut value));
+            if response.changed() {
+                let description = ControlValueDescription::Integer {
+                    value,
+                    default,
+                    step,
+                };
+                *control = CameraControl::new(
+                    control.control(),
+                    control.name().to_string(),
+                    description,
+                    control.flag().to_vec(),
+                    control.active(),
+                )
+            }
+            if response.drag_released() {
+                let mut val = ((value - min) / step) * step + min;
+                if val >= max {
+                    val = max - step
+                }
+                let description = ControlValueDescription::IntegerRange {
+                    min,
+                    max,
+                    value: val,
+                    default,
+                    step,
+                };
+                *control = CameraControl::new(
+                    control.control(),
+                    control.name().to_string(),
+                    description,
+                    control.flag().to_vec(),
+                    control.active(),
+                );
+                true
+            } else {
+                false
+            }
+        }
+        ControlValueDescription::Boolean { mut value, default } => {
+            if ui.checkbox(&mut value, "??").changed() {
+                let description = ControlValueDescription::Boolean { value, default };
+                *control = CameraControl::new(
+                    control.control(),
+                    control.name().to_string(),
+                    description,
+                    control.flag().to_vec(),
+                    control.active(),
+                );
+                true
+            } else {
+                false
+            }
+        }
+        // ControlValueDescription::Float {
+        //     value,
+        //     default,
+        //     step,
+        // } => todo!(),
+        // ControlValueDescription::FloatRange {
+        //     min,
+        //     max,
+        //     value,
+        //     step,
+        //     default,
+        // } => todo!(),
+        _ => {
+            warn!("ignoring the control value: {}", control.value());
+            false
         }
     }
 }
 
-fn update_ctrl(
-    ui: &mut Ui,
-    description: &mut control::Description,
-    control: &mut Control,
-    cam: &Device,
-) {
-    let control::Description {
-        id,
-        typ,
-        name,
-        minimum,
-        maximum,
-        step,
-        default,
-        flags,
-        items: _,
-    } = description;
-    ui.strong(name.clone());
-    if !flags.is_empty() {
-        ui.label(format!("{}", flags));
+impl ActiveCamera {
+    fn get_img(&mut self) -> Result<Image, NokhwaError> {
+        if !self.camera.is_stream_open() {
+            self.camera.open_stream()?
+        }
+        let buf = self.camera.frame()?;
+        Image::new(buf)
     }
-    match typ {
-        control::Type::Integer => {
-            if let control::Value::Integer(mut val) = control.value {
-                ui.horizontal(|ui| {
-                    if ui
-                        .add(
-                            Slider::new(&mut val, *minimum..=*maximum)
-                                .clamp_to_range(true)
-                                .integer()
-                                .step_by(*step as f64),
-                        )
-                        .drag_released()
-                    {
-                        let new = Control {
-                            id: *id,
-                            value: control::Value::Integer(val),
-                        };
-                        match set_control(cam, new) {
-                            Ok(_) => control.value = control::Value::Integer(val),
-                            Err(err) => error!("could not set control {}", err),
-                        }
-                    }
-                    if ui.button("↻").clicked() {
-                        let new = Control {
-                            id: *id,
-                            value: control::Value::Integer(*default),
-                        };
-                        match set_control(cam, new) {
-                            Ok(_) => control.value = control::Value::Integer(*default),
-                            Err(err) => error!("could not set default {}", err),
-                        }
-                    }
-                });
-            } else {
-                error!(
-                    "control description with interger type was: {:?}",
-                    control.value
-                );
-                panic!()
-            };
-        }
-        control::Type::Boolean => {
-            if let control::Value::Boolean(mut b) = control.value {
-                if ui.checkbox(&mut b, "").clicked() {
-                    let new = Control {
-                        id: *id,
-                        value: control::Value::Boolean(b),
-                    };
-                    match set_control(cam, new) {
-                        Ok(_) => control.value = control::Value::Boolean(b),
-                        Err(err) => error!("could not set control {}", err),
-                    }
-                }
-            } else {
-                error!(
-                    "control description with boolean type was {:?}",
-                    control.value
-                );
-                panic!()
-            }
-        }
-        _ => {
-            ui.label(format!("not implemented, because it has type: {}", typ));
+}
+
+#[derive(Debug)]
+pub enum CameraError {
+    CameraNotActive,
+}
+
+impl Display for CameraError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CameraError::CameraNotActive => f.write_str("The camera was not active"),
         }
     }
 }
+
+impl Error for CameraError {}

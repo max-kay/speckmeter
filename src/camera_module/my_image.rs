@@ -1,20 +1,19 @@
-use egui::{self, ColorImage, TextureHandle, Ui};
-use image::{buffer::ConvertBuffer, ImageBuffer, Rgb, RgbaImage};
+use egui::{self, ColorImage, Context, TextureHandle};
+use image::{ImageBuffer, Rgb, RgbaImage, buffer::ConvertBuffer};
 use line_drawing::XiaolinWu;
+use nokhwa::{utils::FrameFormat, NokhwaError, pixel_format::RgbFormat};
 
 use crate::calibration_module::Line;
 
-#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Image {
-    pub width: usize,
-    pub height: usize,
-    pub(crate) data: Vec<u8>,
-    #[serde(skip)]
-    pub(crate) texture: Option<TextureHandle>,
+    width: usize,
+    height: usize,
+    data: Vec<u8>,
+    texture: Option<TextureHandle>
 }
 
 impl Image {
-    pub fn get_texture(&mut self, ui: &mut Ui) -> &egui::TextureHandle {
+    pub fn get_texture(&mut self, ctx: &Context) -> &egui::TextureHandle {
         if self.texture.is_some() {
             return self.texture.as_ref().unwrap();
         }
@@ -26,8 +25,8 @@ impl Image {
         .expect("building buffer failed")
         .convert();
         let image = ColorImage::from_rgba_unmultiplied([self.width, self.height], &buf);
-        self.texture = Some(ui.ctx().load_texture(
-            "calibration img",
+        self.texture = Some(ctx.load_texture(
+            "Image",
             image,
             egui::TextureFilter::Linear,
         ));
@@ -69,15 +68,20 @@ impl Image {
         total / total_weights
     }
 }
-
-impl From<ImageBuffer<Rgb<u8>, &[u8]>> for Image {
-    fn from(value: ImageBuffer<Rgb<u8>, &[u8]>) -> Self {
+impl From<ImageBuffer<Rgb<u8>, Vec<u8>>> for Image {
+    fn from(value: ImageBuffer<Rgb<u8>, Vec<u8>>) -> Self {
         Self {
             width: value.width() as usize,
             height: value.height() as usize,
-            data: value.to_vec(),
-            texture: None,
+            data: value.into_vec(),
+            texture: None
         }
+    }
+}
+
+impl Image {
+    pub fn new(value: nokhwa::Buffer) -> Result<Self, NokhwaError> {
+        Ok(value.decode_image::<RgbFormat>()?.into())
     }
 }
 

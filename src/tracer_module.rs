@@ -8,7 +8,7 @@ use log::warn;
 
 use crate::{
     calibration_module::CalibrationModule,
-    camera_module::{CameraStream, Image},
+    camera_module::{CameraModule, Image},
     LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
 
@@ -25,14 +25,13 @@ impl TracerModule {
     pub fn display(
         &mut self,
         ctx: &Context,
+        camera: &mut CameraModule,
         calib: &mut CalibrationModule,
-        width: u32,
-        height: u32,
     ) {
         egui::SidePanel::right("tracer_opts").show(ctx, |ui| self.side_panel(ui));
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            self.main_view(ui, calib, width, height);
+            self.main_view(ui, camera, calib);
         });
     }
 }
@@ -41,56 +40,59 @@ impl TracerModule {
     pub fn main_view(
         &mut self,
         ui: &mut Ui,
+        camera: &mut CameraModule,
         calib: &mut CalibrationModule,
-        width: u32,
-        height: u32,
     ) {
-        if let Some(img) = CameraStream::get_img(width, height) {
-            // update according to flags
-            if self.record {
-                let t0 = self
-                    .start_inst
-                    .expect("the start value should always be known while recording");
-                self.time_s.push((Instant::now() - t0).as_secs_f32())
-            }
-            for tracer in &mut self.tracers {
-                tracer.update(&img, calib, self.record);
-            }
-            if self.add_new_next {
-                match PeakTrace::new(500.0, &img, calib) {
-                    Some(tracer) => self.tracers.push(tracer),
-                    None => warn!("could not add new tracer"),
-                }
-                self.add_new_next = false
-            }
-            if self.reconfigure_next {
-                self.tracers
-                    .sort_by(|a, b| a.wavelength.partial_cmp(&b.wavelength).unwrap());
+        match camera.get_img() {
+            Ok(img) => {
+                // update according to flags
                 if self.record {
-                    self.start_recording()
-                } else {
-                    self.take_reference()
+                    let t0 = self
+                        .start_inst
+                        .expect("the start value should always be known while recording");
+                    self.time_s.push((Instant::now() - t0).as_secs_f32())
                 }
-                self.reconfigure_next = false
-            }
+                for tracer in &mut self.tracers {
+                    tracer.update(&img, calib, self.record);
+                }
+                if self.add_new_next {
+                    match PeakTrace::new(500.0, &img, calib) {
+                        Some(tracer) => self.tracers.push(tracer),
+                        None => warn!("could not add new tracer"),
+                    }
+                    self.add_new_next = false
+                }
+                if self.reconfigure_next {
+                    self.tracers
+                        .sort_by(|a, b| a.wavelength.partial_cmp(&b.wavelength).unwrap());
+                    if self.record {
+                        self.start_recording()
+                    } else {
+                        self.take_reference()
+                    }
+                    self.reconfigure_next = false
+                }
 
-            //
-            if self.record {
-                todo!()
-            } else {
-                let bars = self
-                    .tracers
-                    .iter()
-                    .enumerate()
-                    .map(|(i, tracer)| {
-                        Bar::new(i as f64, tracer.current_rel() as f64).name(tracer.wavelength)
-                    })
-                    .collect();
-                let chart = BarChart::new(bars).vertical().name("abdbdb");
-                Plot::new("Absorbance").show(ui, |plot_ui| plot_ui.bar_chart(chart));
+                //
+                if self.record {
+                    todo!()
+                } else {
+                    let bars = self
+                        .tracers
+                        .iter()
+                        .enumerate()
+                        .map(|(i, tracer)| {
+                            Bar::new(i as f64, tracer.current_rel() as f64).name(tracer.wavelength)
+                        })
+                        .collect();
+                    let chart = BarChart::new(bars).vertical().name("abdbdb");
+                    Plot::new("Absorbance").show(ui, |plot_ui| plot_ui.bar_chart(chart));
+                }
             }
-        } else {
-            ui.strong("could not get image");
+            Err(err) => {
+                warn!("could not get image Error: {}", err);
+                    ui.strong("could not get image");
+                }
         }
     }
 
