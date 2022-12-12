@@ -164,7 +164,8 @@ impl TracerModule {
                 Ok(opt) => match opt {
                     Some(buf) => {
                         self.path = Some(buf);
-                        self.save_current()
+                        self.save_current();
+                        self.start_recording();
                     }
                     None => warn!("no path was returned"),
                 },
