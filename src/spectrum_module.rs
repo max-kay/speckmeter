@@ -160,7 +160,7 @@ impl SpectrographModule {
                     }
                     None => warn!("no path was returned"),
                 },
-                Err(err) => warn!("could not get location, Error: {}", err),
+                Err(err) => error!("could not get location, Error: {}", err),
             }
         }
     }
@@ -179,7 +179,7 @@ impl Default for SpectrographModule {
             stop: LARGEST_WAVELENGTH as f32,
             step: 1.0,
             save_next: false,
-            path: None,
+            path: home::home_dir(),
             filename: format!("{}.csv", chrono::Local::now().format("%Y_%m_%d_%H_%M")),
         }
     }

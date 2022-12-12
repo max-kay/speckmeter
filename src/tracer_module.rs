@@ -1,16 +1,17 @@
-use std::time::Instant;
+use std::{path::PathBuf, time::Instant};
 
 use egui::{
     plot::{Bar, BarChart, Plot},
     Context, DragValue, Response, Ui,
 };
+use home::home_dir;
 use itertools::Itertools;
-use log::warn;
+use log::{error, info, warn};
 
 use crate::{
     calibration_module::CalibrationModule,
     camera_module::{CameraStream, Image},
-    LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
+    csv, LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
 };
 
 pub struct TracerModule {
@@ -20,6 +21,10 @@ pub struct TracerModule {
     record: bool,
     reconfigure_next: bool,
     add_new_next: bool,
+    path: Option<PathBuf>,
+    save_next: bool,
+    filename: String,
+    comment: String,
 }
 
 impl TracerModule {
@@ -98,6 +103,27 @@ impl TracerModule {
         } else {
             ui.strong("could not get image");
         }
+        if self.save_next {
+            let header = csv::make_csv_header(&self.comment);
+            match self.path {
+                Some(path) => {
+                    let keys = vec!["Time [s]"];
+                    let valss = vec![&self.time_s];
+                    for tracer in self.tracers {
+                        keys.push(&tracer.wavelength.to_string());
+                        valss.push(&tracer.relative_points());
+                    }
+                    if let Err(err) = csv::write_f32_csv(path, keys, valss, &header) {
+                        error!("failed to save file, Error: {}", err);
+                    } else {
+                        info!("save file succesfully to {}", path)
+                    }
+                }
+                None => warn!("cannot save empty tracer"),
+            }
+
+            self.save_next = false;
+        }
     }
 
     pub fn side_panel(&mut self, ui: &mut Ui) {
@@ -115,6 +141,28 @@ impl TracerModule {
 
         if ui.button("start recording").clicked() {
             self.start_recording()
+        }
+
+        if ui.button("save").clicked() {
+            let dialog_result = match home::home_dir() {
+                Some(home) => FileDialog::new()
+                    .set_location(&home)
+                    .set_filename(&self.filename)
+                    .show_save_single_file(),
+                None => FileDialog::new()
+                    .set_filename(&self.filename)
+                    .show_save_single_file(),
+            };
+            match dialog_result {
+                Ok(opt) => match opt {
+                    Some(buf) => {
+                        self.path = Some(buf);
+                        self.save_next = true;
+                    }
+                    None => warn!("no path was returned"),
+                },
+                Err(err) => error!("could not get location, Error: {}", err),
+            }
         }
     }
 }
@@ -143,6 +191,10 @@ impl Default for TracerModule {
             record: false,
             reconfigure_next: false,
             add_new_next: true,
+            path: home::home_dir(),
+            save_next: false,
+            filename: format!("{}.csv", chrono::Local::now().format("%Y_%m_%d_%H_%M")),
+            comment: String::new(),
         }
     }
 }
@@ -192,6 +244,10 @@ impl PeakTrace {
 
     fn abs_and_ref(&self) -> (&[f32], f32) {
         (&self.abs_values, self.reference)
+    }
+
+    fn relative_points(&self) -> Vec<f32> {
+        self.abs_values.map(|val| val / self.reference).collect()
     }
 
     fn current_rel(&self) -> f32 {
