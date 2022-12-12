@@ -105,29 +105,29 @@ impl TracerModule {
         } else {
             ui.strong("could not get image");
         }
-        if self.save_next {
-            let header = csv::make_csv_header(&self.comment);
-            match self.path.as_mut() {
-                Some(path) => {
-                    let mut keys = vec!["Time [s]".to_string()];
-                    let mut valss = vec![self.time_s.clone()];
-                    for tracer in &self.tracers {
-                        let key = tracer.wavelength.to_string();
-                        let relative_points = tracer.relative_points();
-                        keys.push(key);
-                        valss.push(relative_points);
-                    }
-                    if let Err(err) = csv::write_f32_csv(path.clone(), keys, valss, &header) {
-                        error!("failed to save file, Error: {}", err);
-                    } else {
-                        info!("save file succesfully to {:?}", &path)
-                    }
-                }
-                None => warn!("cannot save empty tracer"),
-            }
+    }
 
-            self.save_next = false;
+    fn save_current(&mut self) {
+        let header = csv::make_csv_header(&self.comment);
+        match self.path.as_mut() {
+            Some(path) => {
+                let mut keys = vec!["Time [s]".to_string()];
+                let mut valss = vec![self.time_s.clone()];
+                for tracer in &self.tracers {
+                    let key = tracer.wavelength.to_string();
+                    let relative_points = tracer.relative_points();
+                    keys.push(key);
+                    valss.push(relative_points);
+                }
+                if let Err(err) = csv::write_f32_csv(path.clone(), keys, valss, &header) {
+                    error!("failed to save file, Error: {}", err);
+                } else {
+                    info!("save file succesfully to {:?}", &path)
+                }
+            }
+            None => warn!("cannot save empty tracer"),
         }
+        self.save_next = false;
     }
 
     pub fn side_panel(&mut self, ui: &mut Ui) {
@@ -164,7 +164,7 @@ impl TracerModule {
                 Ok(opt) => match opt {
                     Some(buf) => {
                         self.path = Some(buf);
-                        self.save_next = true;
+                        self.save_current()
                     }
                     None => warn!("no path was returned"),
                 },
