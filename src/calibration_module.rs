@@ -5,7 +5,7 @@ use log::{error, warn};
 use std::{f32::consts::PI, mem::swap};
 
 use crate::{
-    app::{draw_texture, MainState},
+    app::{draw_texture, State},
     camera_module::{CameraStream, Image},
     fitting::{self, Cost, Gradient},
     LARGEST_WAVELENGTH, SMALLEST_WAVELENGTH,
@@ -14,8 +14,11 @@ use crate::{
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct CalibrationModule {
     lines: Vec<(u16, Line)>,
+    #[serde(skip)]
     start: Option<(f32, f32)>,
+    #[serde(skip)]
     current_line: Option<Line>,
+    #[serde(skip)]
     current_text: String,
     grating_const: f32,
     angle: f32,
@@ -31,40 +34,52 @@ impl CalibrationModule {
     pub fn display(
         &mut self,
         ctx: &Context,
-        main_state: &mut MainState,
+        main_state: &mut State,
         calibration_image: &mut Option<Image>,
         width: u32,
         height: u32,
     ) {
         egui::SidePanel::right("spectrograph_opts").show(ctx, |ui| self.side_panel(ui));
-        egui::CentralPanel::default().show(ctx, |ui| match calibration_image.as_mut() {
-            None => {
-                ui.vertical_centered(|ui| {
-                    ui.horizontal_centered(|ui| {
-                        ui.strong("there is no calibration image");
-                        if ui.button("go to camera").clicked() {
-                            *main_state = MainState::CameraView;
-                        }
-                        if ui.button("take calibration image").clicked() {
-                            if let Some(img) = CameraStream::get_img(width, height) {
-                                *calibration_image = Some(img);
-                            } else {
-                                error!("could not take calibration image")
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                if ui.button("take calibration image").clicked() {
+                    if let Some(img) = CameraStream::get_img(width, height) {
+                        *calibration_image = Some(img);
+                    } else {
+                        *calibration_image = None;
+                        error!("could not take calibration image")
+                    }
+                }
+            });
+            match calibration_image.as_mut() {
+                None => {
+                    ui.vertical_centered(|ui| {
+                        ui.horizontal_centered(|ui| {
+                            ui.strong("there is no calibration image");
+                            if ui.button("go to camera").clicked() {
+                                *main_state = State::CameraView;
                             }
-                        }
-                    })
-                });
-            }
-            Some(img) => {
-                let aspect_ratio = img.aspect_ratio();
-                let texture = img.get_texture(ui);
-                ui.vertical_centered(|ui| {
-                    let style = ui.style();
-                    Frame::canvas(style).show(ui, |ui| {
-                        let (to_screen, response) = draw_texture(texture, ui);
-                        self.main_view(ui, to_screen, aspect_ratio, response);
+                            if ui.button("take calibration image").clicked() {
+                                if let Some(img) = CameraStream::get_img(width, height) {
+                                    *calibration_image = Some(img);
+                                } else {
+                                    error!("could not take calibration image")
+                                }
+                            }
+                        })
                     });
-                });
+                }
+                Some(img) => {
+                    let aspect_ratio = img.aspect_ratio();
+                    let texture = img.get_texture(ui);
+                    ui.vertical_centered(|ui| {
+                        let style = ui.style();
+                        Frame::canvas(style).show(ui, |ui| {
+                            let (to_screen, response) = draw_texture(texture, ui);
+                            self.main_view(ui, to_screen, aspect_ratio, response);
+                        });
+                    });
+                }
             }
         });
     }

@@ -4,9 +4,9 @@ use egui::{
     plot::{Bar, BarChart, Plot},
     Context, DragValue, Response, Ui,
 };
-use home::home_dir;
 use itertools::Itertools;
 use log::{error, info, warn};
+use native_dialog::FileDialog;
 
 use crate::{
     calibration_module::CalibrationModule,
@@ -81,13 +81,14 @@ impl TracerModule {
             }
 
             if self.record {
-                Plot::new("Tracer plot").show(ui, |ui| {
-                    for tracer in self.tracers {
-                        let mut line = tracer.make_line();
-                        ui.line(line);
-                        ui.text(tracer.wavelength.to_string())
-                    }
-                });
+                Plot::new("Tracer plot")
+                    .legend(egui::plot::Legend::default())
+                    .show(ui, |ui| {
+                        for tracer in &self.tracers {
+                            let points = tracer.make_points(&self.time_s);
+                            ui.line(egui::plot::Line::new(points).name(tracer.wavelength));
+                        }
+                    });
             } else {
                 let bars = self
                     .tracers
@@ -100,23 +101,26 @@ impl TracerModule {
                 let chart = BarChart::new(bars).vertical().name("abdbdb");
                 Plot::new("Absorbance").show(ui, |plot_ui| plot_ui.bar_chart(chart));
             }
+            ui.ctx().request_repaint()
         } else {
             ui.strong("could not get image");
         }
         if self.save_next {
             let header = csv::make_csv_header(&self.comment);
-            match self.path {
+            match self.path.as_mut() {
                 Some(path) => {
-                    let keys = vec!["Time [s]"];
-                    let valss = vec![&self.time_s];
-                    for tracer in self.tracers {
-                        keys.push(&tracer.wavelength.to_string());
-                        valss.push(&tracer.relative_points());
+                    let mut keys = vec!["Time [s]".to_string()];
+                    let mut valss = vec![self.time_s.clone()];
+                    for tracer in &self.tracers {
+                        let key = tracer.wavelength.to_string();
+                        let relative_points = tracer.relative_points();
+                        keys.push(key);
+                        valss.push(relative_points);
                     }
-                    if let Err(err) = csv::write_f32_csv(path, keys, valss, &header) {
+                    if let Err(err) = csv::write_f32_csv(path.clone(), keys, valss, &header) {
                         error!("failed to save file, Error: {}", err);
                     } else {
-                        info!("save file succesfully to {}", path)
+                        info!("save file succesfully to {:?}", &path)
                     }
                 }
                 None => warn!("cannot save empty tracer"),
@@ -133,6 +137,9 @@ impl TracerModule {
         }
         if ui.button("add new wavelength").clicked() {
             self.add_new_next = true;
+            if self.record {
+                self.start_recording();
+            }
         }
 
         if ui.button("Take reference").clicked() {
@@ -242,25 +249,22 @@ impl PeakTrace {
         )
     }
 
-    fn abs_and_ref(&self) -> (&[f32], f32) {
-        (&self.abs_values, self.reference)
-    }
-
     fn relative_points(&self) -> Vec<f32> {
-        self.abs_values.map(|val| val / self.reference).collect()
+        self.abs_values
+            .iter()
+            .map(|val| val / self.reference)
+            .collect()
     }
 
     fn current_rel(&self) -> f32 {
         self.current_abs / self.reference
     }
 
-    fn make_points(&self, ts: &[f32]) -> egui::plot::Line {
-        egui::plot::Line::new(
-            self.abs_values
-                .iter()
-                .zip(ts)
-                .map(|(val, t)| [ts as f64, val / self.reference as f64])
-                .collect_vec(),
-        )
+    fn make_points(&self, ts: &[f32]) -> Vec<[f64; 2]> {
+        self.abs_values
+            .iter()
+            .zip(ts)
+            .map(|(val, t)| [*t as f64, (*val / self.reference) as f64])
+            .collect_vec()
     }
 }

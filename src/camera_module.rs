@@ -18,7 +18,7 @@ pub mod my_image;
 pub use camera_stream::CameraStream;
 pub use my_image::Image;
 
-use crate::app::draw_texture;
+use crate::app::{draw_texture, State};
 
 pub struct CameraModule {
     inner: Option<CamInner>,
@@ -26,7 +26,12 @@ pub struct CameraModule {
 }
 
 impl CameraModule {
-    pub fn display(&mut self, ctx: &Context, calibration_image: &mut Option<Image>) {
+    pub fn display(
+        &mut self,
+        ctx: &Context,
+        calibration_image: &mut Option<Image>,
+        state: &mut State,
+    ) {
         egui::SidePanel::left("spectrograph_opts").show(ctx, |ui| self.side_panel(ui));
         egui::CentralPanel::default().show(ctx, |ui| {
             if CameraStream::is_open() {
@@ -34,6 +39,7 @@ impl CameraModule {
                     if ui.button("take calibration image").clicked() {
                         if let Some(img) = CameraStream::get_img(self.width(), self.height()) {
                             *calibration_image = Some(img);
+                            *state = State::Calibration;
                         } else {
                             *calibration_image = None;
                             error!("could not take calibration image")
@@ -136,7 +142,7 @@ impl CameraModule {
                 self.inner
                     .as_mut()
                     .expect("camera should be initialised")
-                    .update(ui);
+                    .update_side_panel(ui);
             }
             (false, true) => {
                 unreachable!()
@@ -218,7 +224,7 @@ impl CamInner {
 }
 
 impl CamInner {
-    fn update(&mut self, ui: &mut Ui) {
+    fn update_side_panel(&mut self, ui: &mut Ui) {
         ui.label(format!(
             "{}x{}\n{} - {}",
             self.width,

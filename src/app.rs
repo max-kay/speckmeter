@@ -20,7 +20,7 @@ pub struct SpeckApp {
     spectrograph_module: SpectrographModule,
     #[serde(skip)]
     tracer_module: TracerModule,
-    main_state: MainState,
+    state: State,
     show_logs: bool,
 }
 
@@ -30,7 +30,7 @@ impl Default for SpeckApp {
             camera_module: Default::default(),
             calibration_img: None,
             calibration_module: CalibrationModule::new(),
-            main_state: Default::default(),
+            state: Default::default(),
             spectrograph_module: Default::default(),
             tracer_module: Default::default(),
             show_logs: true,
@@ -39,7 +39,7 @@ impl Default for SpeckApp {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
-pub enum MainState {
+pub enum State {
     #[default]
     CameraView,
     Calibration,
@@ -72,22 +72,25 @@ impl eframe::App for SpeckApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("menu").show(ctx, |ui| self.menu(ui));
-        match self.main_state {
-            MainState::CameraView => self.camera_module.display(ctx, &mut self.calibration_img),
-            MainState::Calibration => self.calibration_module.display(
+        match self.state {
+            State::CameraView => {
+                self.camera_module
+                    .display(ctx, &mut self.calibration_img, &mut self.state)
+            }
+            State::Calibration => self.calibration_module.display(
                 ctx,
-                &mut self.main_state,
+                &mut self.state,
                 &mut self.calibration_img,
                 self.camera_module.width(),
                 self.camera_module.height(),
             ),
-            MainState::GraphView => self.spectrograph_module.display(
+            State::GraphView => self.spectrograph_module.display(
                 ctx,
                 self.camera_module.width(),
                 self.camera_module.height(),
                 &mut self.calibration_module,
             ),
-            MainState::TracerView => self.tracer_module.display(
+            State::TracerView => self.tracer_module.display(
                 ctx,
                 &mut self.calibration_module,
                 self.camera_module.width(),
@@ -103,14 +106,10 @@ impl SpeckApp {
     fn menu(&mut self, ui: &mut Ui) {
         egui::menu::bar(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                ui.selectable_value(&mut self.main_state, MainState::CameraView, "📷 Camera");
-                ui.selectable_value(
-                    &mut self.main_state,
-                    MainState::Calibration,
-                    "⭕ Calibration",
-                );
-                ui.selectable_value(&mut self.main_state, MainState::GraphView, "Spectrograph");
-                ui.selectable_value(&mut self.main_state, MainState::TracerView, "Tracer");
+                ui.selectable_value(&mut self.state, State::CameraView, "📷 Camera");
+                ui.selectable_value(&mut self.state, State::Calibration, "⭕ Calibration");
+                ui.selectable_value(&mut self.state, State::GraphView, "Spectrograph");
+                ui.selectable_value(&mut self.state, State::TracerView, "Tracer");
             });
         });
     }

@@ -260,8 +260,8 @@ impl AbsSpectrograph {
             .collect_vec();
         csv::write_f32_csv(
             path,
-            ["wavelengths [nm]", "intensity"],
-            [&wavelengths, &self.values],
+            vec!["wavelengths [nm]".to_string(), "intensity".to_string()],
+            vec![wavelengths, self.values.clone()],
             header,
         )
     }
@@ -312,8 +312,8 @@ impl RelativeSpectrum {
             .collect_vec();
         csv::write_f32_csv(
             path,
-            ["wavelengths [nm]", "intensity"],
-            [&wavelengths, &self.values],
+            vec!["wavelengths [nm]".to_string(), "intensity".to_string()],
+            vec![wavelengths, self.values.clone()],
             header,
         )
     }

@@ -1,13 +1,14 @@
 use std::path::Path;
 
-pub fn write_f32_csv<const N: usize>(
+pub fn write_f32_csv(
     path: impl AsRef<Path>,
-    keys: [&str; N],
-    valss: [&[f32]; N],
+    keys: Vec<String>,
+    valss: Vec<Vec<f32>>,
     header: &str,
 ) -> std::io::Result<()> {
+    assert_eq!(keys.len(), valss.len());
     let len = valss[0].len();
-    for vals in valss {
+    for vals in valss.iter() {
         assert_eq!(len, vals.len())
     }
     let mut string = header.to_string();
@@ -19,7 +20,7 @@ pub fn write_f32_csv<const N: usize>(
     string.push_str("\n\n");
 
     for i in 0..len {
-        for vals in valss {
+        for vals in valss.iter() {
             string.push_str(&format!("{:e}, ", vals[i]))
         }
         string.push('\n')
