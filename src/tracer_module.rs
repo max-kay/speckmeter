@@ -4,6 +4,7 @@ use egui::{
     plot::{Bar, BarChart, Plot},
     Context, DragValue, Response, Ui,
 };
+use itertools::Itertools;
 use log::warn;
 
 use crate::{
@@ -74,9 +75,14 @@ impl TracerModule {
                 self.reconfigure_next = false
             }
 
-            //
             if self.record {
-                todo!()
+                Plot::new("Tracer plot").show(ui, |ui| {
+                    for tracer in self.tracers {
+                        let mut line = tracer.make_line();
+                        ui.line(line);
+                        ui.text(tracer.wavelength.to_string())
+                    }
+                });
             } else {
                 let bars = self
                     .tracers
@@ -179,7 +185,8 @@ impl PeakTrace {
         ui.add(
             DragValue::new(&mut self.wavelength)
                 .clamp_range(SMALLEST_WAVELENGTH as f32..=LARGEST_WAVELENGTH as f32)
-                .prefix("λ: "),
+                .prefix("λ: ")
+                .suffix(" nm"),
         )
     }
 
@@ -189,5 +196,15 @@ impl PeakTrace {
 
     fn current_rel(&self) -> f32 {
         self.current_abs / self.reference
+    }
+
+    fn make_points(&self, ts: &[f32]) -> egui::plot::Line {
+        egui::plot::Line::new(
+            self.abs_values
+                .iter()
+                .zip(ts)
+                .map(|(val, t)| [ts as f64, val / self.reference as f64])
+                .collect_vec(),
+        )
     }
 }
