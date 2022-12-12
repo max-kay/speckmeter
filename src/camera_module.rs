@@ -1,4 +1,5 @@
-use egui::{Context, DragValue, Slider, TextureHandle, Ui};
+use egui::{ComboBox, Context, DragValue, Slider, TextureHandle, Ui};
+use itertools::CombinationsWithReplacement;
 use log::{error, warn};
 use nokhwa::{
     pixel_format::RgbFormat,
@@ -25,19 +26,20 @@ impl CameraModule {
     pub fn display(&mut self, ctx: &Context, calibration_image: &mut Option<Image>) {
         egui::SidePanel::left("spectrograph_opts").show(ctx, |ui| self.side_panel(ui));
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.active_camera.is_none(){
+            if self.active_camera.is_none() {
                 ui.heading("No active camera");
                 return;
             }
             let cam = self.active_camera.as_mut().unwrap();
-            match cam.get_img(){
+            match cam.get_img() {
                 Err(err) => error!("could not get new image, Error: {}", err),
                 Ok(mut image) => {
+                    draw_texture(image.get_texture(ui.ctx()), ui);
                     if ui.button("take calibration image").clicked() {
-                        draw_texture(image.get_texture(ui.ctx()), ui);
                         *calibration_image = Some(image);
-                    }
-                },
+                    };
+                    ui.ctx().request_repaint();
+                }
             }
         });
     }
@@ -116,9 +118,7 @@ struct ActiveCamera {
 
 impl ActiveCamera {
     fn new(index: CameraIndex) -> Result<Self, NokhwaError> {
-        let format = RequestedFormat::new::<RgbFormat>(
-            nokhwa::utils::RequestedFormatType::None,
-        );
+        let format = RequestedFormat::new::<RgbFormat>(nokhwa::utils::RequestedFormatType::None);
         let camera = Camera::new(index, format)?;
         let controls = camera.camera_controls()?;
         Ok(Self {
@@ -142,12 +142,6 @@ impl ActiveCamera {
         let mut current_resolution = current_format.resolution(); // mut because it is used to search for framerates after setting resolution
         let current_frame_rate = current_format.frame_rate();
 
-        if current_format.format() != FrameFormat::RAWRGB {
-            if let Err(err) = self.camera.set_frame_format(FrameFormat::RAWRGB) {
-                error!("failed to set frame format, Error: {}", err);
-            }
-        }
-
         ui.label(format!(
             "{}, {} FPS",
             current_resolution, current_frame_rate
@@ -155,20 +149,24 @@ impl ActiveCamera {
 
         match self.camera.compatible_fourcc() {
             Ok(compatible_formats) => {
-                for frame_format in compatible_formats {
-                    if ui
-                        .selectable_label(
-                            current_format.format() == frame_format,
-                            frame_format.to_string(),
-                        )
-                        .clicked()
-                    {
-                        match self.camera.set_frame_format(frame_format) {
-                            Ok(_) => (),
-                            Err(err) => error!("could not set camera format Error: {}", err),
+                ComboBox::from_label(current_format.format().to_string()).show_ui(ui, |ui| {
+                    for frame_format in compatible_formats {
+                        if ui
+                            .selectable_label(
+                                current_format.format() == frame_format,
+                                frame_format.to_string(),
+                            )
+                            .clicked()
+                        {
+                            match self.camera.set_frame_format(frame_format) {
+                                Ok(_) => (),
+                                Err(err) => {
+                                    error!("could not set camera format Error: {}", err)
+                                }
+                            }
                         }
                     }
-                }
+                });
             }
             Err(err) => {
                 error!("could not querry compatible frame formats, Error: {}", err);
@@ -184,28 +182,37 @@ impl ActiveCamera {
             Ok(resolutions_map) => {
                 let mut compatible_resolutions = Vec::from_iter(resolutions_map.keys());
                 compatible_resolutions.sort();
-                for resolution in compatible_resolutions {
-                    if ui
-                        .selectable_label(current_resolution == *resolution, resolution.to_string())
-                        .clicked()
-                    {
-                        if let Err(err) = self.camera.set_resolution(*resolution) {
-                            error!("{}", err)
-                        }
-                        current_resolution = *resolution
-                    }
-                }
-
-                for frame_rate in resolutions_map.get(&current_resolution).unwrap() {
-                    if ui
-                        .selectable_label(current_frame_rate == *frame_rate, frame_rate.to_string())
-                        .clicked()
-                    {
-                        if let Err(err) = self.camera.set_frame_rate(*frame_rate) {
-                            error!("{}", err)
+                ComboBox::from_label(current_resolution.to_string()).show_ui(ui, |ui| {
+                    for resolution in compatible_resolutions {
+                        if ui
+                            .selectable_label(
+                                current_resolution == *resolution,
+                                resolution.to_string(),
+                            )
+                            .clicked()
+                        {
+                            if let Err(err) = self.camera.set_resolution(*resolution) {
+                                error!("{}", err)
+                            }
+                            current_resolution = *resolution
                         }
                     }
-                }
+                });
+                ComboBox::from_label(current_frame_rate.to_string()).show_ui(ui, |ui| {
+                    for frame_rate in resolutions_map.get(&current_resolution).unwrap() {
+                        if ui
+                            .selectable_label(
+                                current_frame_rate == *frame_rate,
+                                frame_rate.to_string(),
+                            )
+                            .clicked()
+                        {
+                            if let Err(err) = self.camera.set_frame_rate(*frame_rate) {
+                                error!("{}", err)
+                            }
+                        }
+                    }
+                });
             }
             Err(err) => {
                 error!("could not querry compatible frame formats, Error: {}", err);
@@ -251,8 +258,7 @@ impl ActiveCamera {
 }
 
 fn control_ui(ui: &mut Ui, control: &mut CameraControl) -> bool {
-    ui.label(format!("{}", control.control()));
-    ui.label(format!("flags: {:?}", control.flag()));
+    ui.strong(format!("{}", control.control()));
     let descr = control.description().clone();
     match descr {
         ControlValueDescription::Integer {
@@ -341,7 +347,7 @@ fn control_ui(ui: &mut Ui, control: &mut CameraControl) -> bool {
             }
         }
         ControlValueDescription::Boolean { mut value, default } => {
-            if ui.checkbox(&mut value, "??").changed() {
+            if ui.checkbox(&mut value, "active").changed() {
                 let description = ControlValueDescription::Boolean { value, default };
                 *control = CameraControl::new(
                     control.control(),
