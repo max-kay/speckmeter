@@ -126,16 +126,18 @@ impl CalibrationModule {
         self.current_line = None;
     }
 
+    // TODO left to right or right to left
     fn validate(&mut self) -> bool {
         self.lines
             .iter_mut()
             .for_each(|(_, line)| line.make_top_to_bottom());
         self.lines.sort_by_key(|(wavelength, _)| *wavelength);
-        self.lines.is_sorted_by_key(|(_, line)| line.start.0)
-            && self.lines.is_sorted_by_key(|(_, line)| line.end.0)
+        self.lines.is_sorted_by_key(|(_, line)| -line.start.0)
+            && self.lines.is_sorted_by_key(|(_, line)| -line.end.0)
     }
 
     fn generate_regression(&mut self) -> Option<()> {
+        dbg!(self.lines.clone());
         if self.validate() && self.lines.len() > 1 {
             self.spectral = SpectralLines::new(
                 dbg!(self.lines.clone()),
@@ -185,7 +187,7 @@ impl CalibrationModule {
 const ACTIVE_LINE_STROKE: (f32, Color32) = (5.0, Color32::WHITE);
 const DRAWN_LINE_STROKE: (f32, Color32) = (5.0, Color32::RED);
 const GEN_LINE_STROKE: (f32, Color32) = (2.0, Color32::BLACK);
-const TEXT_COLOR: Color32 = Color32::WHITE;
+const TEXT_COLOR: Color32 = Color32::BLACK;
 
 impl CalibrationModule {
     pub fn main_view(
@@ -210,6 +212,13 @@ impl CalibrationModule {
         // Show generated lines if they exist and line_count is set and then skip the rest of this fn
         if let Some(line_count) = self.show_generated.as_ref() {
             if let Some(spectral) = self.spectral.as_ref() {
+                ui.painter()
+                    .line_segment(spectral.top_line.to_points(to_screen), ACTIVE_LINE_STROKE);
+                ui.painter().line_segment(
+                    spectral.bottom_line.to_points(to_screen),
+                    ACTIVE_LINE_STROKE,
+                );
+
                 let step =
                     (LARGEST_WAVELENGTH - SMALLEST_WAVELENGTH) as f32 / (*line_count - 1) as f32;
                 for i in 0..*line_count {
@@ -226,12 +235,7 @@ impl CalibrationModule {
                         TEXT_COLOR,
                     );
                 }
-                ui.painter()
-                    .line_segment(spectral.top_line.to_points(to_screen), ACTIVE_LINE_STROKE);
-                ui.painter().line_segment(
-                    spectral.bottom_line.to_points(to_screen),
-                    ACTIVE_LINE_STROKE,
-                );
+                
             }
         }
         // paint lines drawn by the user and its corresponding wavelength
