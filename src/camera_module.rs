@@ -167,8 +167,8 @@ pub fn fetch_controls(camera: &Device) -> Result<Vec<(control::Description, Cont
         match camera.control(d.id) {
             Ok(control) => controls.push((d, control)),
             Err(err) => warn!(
-                "failed to load value for {} disregarding it. Err:{}",
-                d.name, err
+                "failed to load value for {}, id: {}, type: {}, disregarding it. Err:{}",
+                d.name, d.id,d.typ, err
             ),
         }
     }
@@ -437,6 +437,9 @@ fn update_ctrl(
                 );
                 panic!()
             }
+        }
+        control::Type::Menu => {
+            ui.label(format!("{:?}", control.value));
         }
         _ => {
             ui.label(format!("not implemented, because it has type: {}", typ));

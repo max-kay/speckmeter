@@ -212,13 +212,6 @@ impl CalibrationModule {
         // Show generated lines if they exist and line_count is set and then skip the rest of this fn
         if let Some(line_count) = self.show_generated.as_ref() {
             if let Some(spectral) = self.spectral.as_ref() {
-                ui.painter()
-                    .line_segment(spectral.top_line.to_points(to_screen), ACTIVE_LINE_STROKE);
-                ui.painter().line_segment(
-                    spectral.bottom_line.to_points(to_screen),
-                    ACTIVE_LINE_STROKE,
-                );
-
                 let step =
                     (LARGEST_WAVELENGTH - SMALLEST_WAVELENGTH) as f32 / (*line_count - 1) as f32;
                 for i in 0..*line_count {
@@ -235,7 +228,6 @@ impl CalibrationModule {
                         TEXT_COLOR,
                     );
                 }
-                
             }
         }
         // paint lines drawn by the user and its corresponding wavelength
@@ -374,18 +366,16 @@ impl Line {
         }
     }
 
-    // returns the point at frac of the whole line for a line from x=(0,1)
-    pub fn normed_x_fraction(&self, frac: f32) -> (f32, f32) {
-        (frac, ((self.end.1 - self.start.1) * frac + self.start.1))
+    pub fn cut_with_horizontal(&self, y: f32) -> f32 {
+        self.start.0
+            + (y - self.start.1) / (self.end.1 - self.start.1) * (self.end.0 - self.start.0)
     }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SpectralLines {
     grating_const: f32,
-    top_line: Line,
     top_param: Vec<f32>,
-    bottom_line: Line,
     bottom_param: Vec<f32>,
 }
 
@@ -408,18 +398,11 @@ impl SpectralLines {
             .map(|(wl, _)| *wl as f32 * grating_const / 1_000_000.0)
             .collect_vec();
 
-        let x0s = measure.iter().map(|(_, line)| line.start.0).collect_vec();
-        let y0s = measure.iter().map(|(_, line)| line.start.1).collect_vec();
-        let x1s = measure.iter().map(|(_, line)| line.end.0).collect_vec();
-        let y1s = measure.iter().map(|(_, line)| line.end.1).collect_vec();
+        let lines = measure.iter().map(|(_, line)| line).collect_vec();
 
-        let (top_line, top_param) = gen_param(&x0s, &y0s, &rs, init_params.clone());
-        let (bottom_line, bottom_param) = gen_param(&x1s, &y1s, &rs, init_params);
-
+        let (top_param, bottom_param) = gen_param(lines, &rs, init_params);
         Some(Self {
-            top_line,
             top_param,
-            bottom_line,
             bottom_param,
             grating_const,
         })
@@ -432,8 +415,8 @@ impl SpectralLines {
             &self.bottom_param,
         );
         Line {
-            start: self.top_line.normed_x_fraction(top_normed_x),
-            end: self.bottom_line.normed_x_fraction(bottom_normed_x),
+            start: (top_normed_x, 0.0),
+            end: (bottom_normed_x, 1.0),
         }
     }
 }
@@ -446,26 +429,24 @@ pub fn normed_x(lambda_times_grating_const: f32, parameters: &[f32]) -> f32 {
     b * ((a * root - lambda_times_grating_const) / (root + a * lambda_times_grating_const)) + c
 }
 
-fn gen_param(xs: &[f32], ys: &[f32], rs: &[f32], init_param: Vec<f32>) -> (Line, Vec<f32>) {
-    let fitting::LinearRegression { slope, y_offset } = fitting::lin_reg(xs, ys);
-    let line = Line {
-        start: (0.0, y_offset),
-        end: (1.0, y_offset + slope),
+fn gen_param(lines: Vec<&Line>, rs: &[f32], init_param: Vec<f32>) -> (Vec<f32>, Vec<f32>) {
+    let top_xs = lines.iter().map(|line| line.cut_with_horizontal(0.0));
+    let top_problem = FittingProblem {
+        data: top_xs.into_iter().zip(rs.iter().cloned()).collect(),
     };
-    let norm_xs = xs
-        .iter()
-        .zip(ys)
-        .map(|(x0, y0)| (y0 + x0 / slope - y_offset) / (slope + 1.0 / slope));
+    let top_param = fitting::search_minimum(top_problem, init_param.clone(), 1_000_000, 0.1);
 
-    let problem = FittingProblem {
-        data: norm_xs.zip(rs.iter().cloned()).collect_vec(),
+    let bottom_xs = lines.iter().map(|line| line.cut_with_horizontal(1.0));
+    let bottom_problem = FittingProblem {
+        data: bottom_xs.into_iter().zip(rs.iter().cloned()).collect(),
     };
-    let param = fitting::search_minimum(problem, init_param, 4000, 0.1);
-    (line, param)
+    let bottom_param = fitting::search_minimum(bottom_problem, init_param, 1_000_000, 0.1);
+
+    (top_param, bottom_param)
 }
 
 struct FittingProblem {
-    data: Vec<(f32, f32)>, // projected_x, ratio (lambda / d), where d = distance between lines on grating
+    data: Vec<(f32, f32)>, // (xs, ratios) ratio = (lambda / d), where d = distance between lines on grating
 }
 
 impl Cost for FittingProblem {
