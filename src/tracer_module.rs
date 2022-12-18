@@ -108,7 +108,6 @@ impl TracerModule {
     }
 
     fn save_current(&mut self) {
-        let header = csv::make_csv_header(&self.comment);
         match self.path.as_mut() {
             Some(path) => {
                 let mut keys = vec!["Time [s]".to_string()];
@@ -119,7 +118,7 @@ impl TracerModule {
                     keys.push(key);
                     valss.push(relative_points);
                 }
-                if let Err(err) = csv::write_f32_csv(path.clone(), keys, valss, &header) {
+                if let Err(err) = csv::write_f32_csv(path.clone(), keys, valss, &self.comment) {
                     error!("failed to save file, Error: {}", err);
                 } else {
                     info!("save file succesfully to {:?}", &path)

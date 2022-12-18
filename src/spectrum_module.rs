@@ -74,12 +74,8 @@ impl SpectrographModule {
                             let spec = RelativeSpectrum::new(spec, reference);
                             spec.show(ui);
                             if self.save_next {
-                                let header = csv::make_csv_header(&format!(
-                                    "{}\nthis is a relative spectrum",
-                                    self.comment
-                                ));
                                 match self.path.as_ref() {
-                                    Some(path) => match spec.write_to_csv(path, &header) {
+                                    Some(path) => match spec.write_to_csv(path, &self.comment) {
                                         Ok(_) => info!("saved file succesfully to {:?}", path),
                                         Err(err) => error!("failed to save file Error: {}", err),
                                     },
@@ -96,12 +92,8 @@ impl SpectrographModule {
                     }
                 } else {
                     if self.save_next {
-                        let header = csv::make_csv_header(&format!(
-                            "{}\nthis is an unreliable absolute spectrum",
-                            self.comment
-                        ));
                         match self.path.as_ref() {
-                            Some(path) => match spec.write_to_csv(path, &header) {
+                            Some(path) => match spec.write_to_csv(path, &self.comment) {
                                 Ok(_) => info!("saved file succesfully to {:?}", path),
                                 Err(err) => error!("failed to save file Error: {}", err),
                             },
