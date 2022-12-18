@@ -185,10 +185,6 @@ impl PeakTrace {
         )
     }
 
-    fn abs_and_ref(&self) -> (&[f32], f32) {
-        (&self.abs_values, self.reference)
-    }
-
     fn current_rel(&self) -> f32 {
         self.current_abs / self.reference
     }

@@ -20,7 +20,7 @@ line_drawing = "1.0.0"
 chrono = "0.4.23"
 native-dialog = "0.6.3"
 home = "0.5.4"
-nokhwa = { version = "0.10.0-rc.2", features = ["input-v4l", "input-avfoundation"] }
+nokhwa = { version = "0.10.0-rc.2", features = ["input-avfoundation"] }
 
 
 [profile.release]

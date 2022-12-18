@@ -1,12 +1,8 @@
-use egui::{ComboBox, Context, DragValue, Slider, TextureHandle, Ui};
-use itertools::CombinationsWithReplacement;
+use egui::{ComboBox, Context, DragValue, Ui};
 use log::{error, warn};
 use nokhwa::{
     pixel_format::RgbFormat,
-    utils::{
-        CameraControl, CameraIndex, CameraInfo, ControlValueDescription, FrameFormat,
-        RequestedFormat,
-    },
+    utils::{CameraControl, CameraIndex, CameraInfo, ControlValueDescription, RequestedFormat},
     Camera, NokhwaError,
 };
 use std::{error::Error, fmt::Display};

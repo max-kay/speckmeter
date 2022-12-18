@@ -1,7 +1,7 @@
 use egui::{self, ColorImage, Context, TextureHandle};
 use image::{ImageBuffer, Rgb, RgbaImage, buffer::ConvertBuffer};
 use line_drawing::XiaolinWu;
-use nokhwa::{utils::FrameFormat, NokhwaError, pixel_format::RgbFormat};
+use nokhwa::{NokhwaError, pixel_format::RgbFormat};
 
 use crate::calibration_module::Line;
 
@@ -68,6 +68,7 @@ impl Image {
         total / total_weights
     }
 }
+
 impl From<ImageBuffer<Rgb<u8>, Vec<u8>>> for Image {
     fn from(value: ImageBuffer<Rgb<u8>, Vec<u8>>) -> Self {
         Self {
