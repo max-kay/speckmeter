@@ -434,13 +434,14 @@ fn gen_param(lines: Vec<&Line>, rs: &[f32], init_param: Vec<f32>) -> (Vec<f32>, 
     let top_problem = FittingProblem {
         data: top_xs.into_iter().zip(rs.iter().cloned()).collect(),
     };
-    let top_param = fitting::search_minimum(top_problem, init_param.clone(), 1_000_000, 0.1);
+    let top_param =
+        fitting::search_minimum(top_problem, init_param.clone(), 1_000_000, 0.1, 0.0005);
 
     let bottom_xs = lines.iter().map(|line| line.cut_with_horizontal(1.0));
     let bottom_problem = FittingProblem {
         data: bottom_xs.into_iter().zip(rs.iter().cloned()).collect(),
     };
-    let bottom_param = fitting::search_minimum(bottom_problem, init_param, 1_000_000, 0.1);
+    let bottom_param = fitting::search_minimum(bottom_problem, init_param, 1_000_000, 0.1, 0.0005);
 
     (top_param, bottom_param)
 }
@@ -450,15 +451,15 @@ struct FittingProblem {
 }
 
 impl Cost for FittingProblem {
-    fn cost(&self, parameters: Vec<f32>) -> f32 {
+    fn cost(&self, parameters: &[f32]) -> f32 {
         self.data.iter().fold(0.0, |acc, (x, r)| {
-            acc + (normed_x(*r, &parameters) - x).powi(2)
+            acc + (normed_x(*r, parameters) - x).powi(2)
         }) / self.data.len() as f32
     }
 }
 
 impl Gradient for FittingProblem {
-    fn gradient(&self, parameters: Vec<f32>) -> Vec<f32> {
+    fn gradient(&self, parameters: &[f32]) -> Vec<f32> {
         let a = parameters[0];
         let b = parameters[1];
         let _c = parameters[2];
@@ -467,7 +468,7 @@ impl Gradient for FittingProblem {
             .iter()
             .fold([0.0, 0.0, 0.0], |acc, (x, r)| {
                 let [mut da, mut db, mut dc] = acc;
-                let prefactor = 2.0 * (normed_x(*r, &parameters) - x);
+                let prefactor = 2.0 * (normed_x(*r, parameters) - x);
                 let root = (1.0 - r * r).sqrt();
 
                 da += prefactor * b * (root * (root + a * r) - (a * root - r) * r)

@@ -168,7 +168,7 @@ pub fn fetch_controls(camera: &Device) -> Result<Vec<(control::Description, Cont
             Ok(control) => controls.push((d, control)),
             Err(err) => warn!(
                 "failed to load value for {}, id: {}, type: {}, disregarding it. Err:{}",
-                d.name, d.id,d.typ, err
+                d.name, d.id, d.typ, err
             ),
         }
     }
@@ -439,7 +439,40 @@ fn update_ctrl(
             }
         }
         control::Type::Menu => {
-            ui.label(format!("{:?}", control.value));
+            if let control::Value::Integer(mut val) = control.value {
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(
+                            Slider::new(&mut val, *minimum..=*maximum)
+                                .clamp_to_range(true)
+                                .integer()
+                                .step_by(*step as f64),
+                        )
+                        .drag_released()
+                    {
+                        let new = Control {
+                            id: *id,
+                            value: control::Value::Integer(val),
+                        };
+                        match set_control(cam, new) {
+                            Ok(_) => control.value = control::Value::Integer(val),
+                            Err(err) => error!("could not set control {}", err),
+                        }
+                    }
+                    if ui.button("↻").clicked() {
+                        let new = Control {
+                            id: *id,
+                            value: control::Value::Integer(*default),
+                        };
+                        match set_control(cam, new) {
+                            Ok(_) => control.value = control::Value::Integer(*default),
+                            Err(err) => error!("could not set default {}", err),
+                        }
+                    }
+                });
+            } else {
+                ui.label(format!("{:?}", control.value));
+            }
         }
         _ => {
             ui.label(format!("not implemented, because it has type: {}", typ));

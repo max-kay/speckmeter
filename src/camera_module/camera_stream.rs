@@ -72,10 +72,6 @@ impl CameraStream {
     }
 
     pub fn open_stream(camera: &Device) {
-        // let ctrl = v4l::Control{ id: 10094849, value: v4l::control::Value::Boolean(false) };
-        // if let Err(err) = camera.set_control(ctrl){
-        //     error!("failed to set Exposure Auto to false Error: {}", err)
-        // }
         if CAMERA_STREAM.lock().unwrap().is_none() {
             match MmapStream::with_buffers(camera, buffer::Type::VideoCapture, 5) {
                 Ok(stream) => *CAMERA_STREAM.lock().unwrap() = Some(stream),
