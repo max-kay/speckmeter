@@ -52,7 +52,6 @@ impl SpeckApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // This is also where you can customized the look at feel of egui using
         // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
-        nokhwa::nokhwa_initialize(|_b|());
         let mut app = Self::default();
         if let Some(storage) = cc.storage {
             app.calibration_module = eframe::get_value(storage, "calibration").unwrap_or_default();

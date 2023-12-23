@@ -85,7 +85,7 @@ impl CameraModule {
                 if ui.button("initialise").clicked() {
                     match ActiveCamera::new(device.index().clone()) {
                         Ok(inner) => self.active_camera = Some(inner),
-                        Err(err) => error!("{}", err),
+                        Err(err) => error!("could not initialize! {}", err),
                     }
                 }
             }
@@ -188,7 +188,7 @@ impl ActiveCamera {
                             .clicked()
                         {
                             if let Err(err) = self.camera.set_resolution(*resolution) {
-                                error!("{}", err)
+                                error!("could not set resolution {}", err)
                             }
                             current_resolution = *resolution
                         }
@@ -204,7 +204,7 @@ impl ActiveCamera {
                             .clicked()
                         {
                             if let Err(err) = self.camera.set_frame_rate(*frame_rate) {
-                                error!("{}", err)
+                                error!("could not set frame rate {}", err)
                             }
                         }
                     }
